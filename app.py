@@ -7,21 +7,6 @@ from datetime import datetime
 from pathlib import Path
 
 
-_original_st_image = st.image
-_rendered_image_keys: set[str] = set()
-
-
-def render_image_once(image, *args, **kwargs):
-    image_key = str(image)
-    if image_key in _rendered_image_keys:
-        return None
-    _rendered_image_keys.add(image_key)
-    return _original_st_image(image, *args, **kwargs)
-
-
-st.image = render_image_once
-
-
 def resolve_logo_path() -> Path | None:
     explicit_candidates = [
         Path("assets/boxland2.png"),
@@ -57,7 +42,7 @@ logo_path = resolve_logo_path()
 if logo_path:
     left, center, right = st.columns([1, 2, 1])
     with center:
-        st.image(str(logo_path), width=320)
+        st.image(str(logo_path), use_container_width=True)
 else:
     st.caption("Logo not found. Add `boxland.png` to repo root or `assets/boxland.png`.")
 
@@ -138,6 +123,11 @@ def category_summary(df: pd.DataFrame) -> pd.DataFrame:
         .sort_values("total_revenue", ascending=False)
     )
 
+from pathlib import Path
+
+logo_path = Path("assets/boxland.png")
+if logo_path.exists():
+    st.image(str(logo_path), width=320)
 
 st.caption("Auto-refreshes from Google Sheets. Data is cached for 1 hour.")
 
