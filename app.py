@@ -9,6 +9,8 @@ from pathlib import Path
 
 def resolve_logo_path() -> Path | None:
     explicit_candidates = [
+        Path("assets/boxland2.png"),
+        Path("boxland2.png"),
         Path("assets/boxland.png"),
         Path("boxland.png"),
         Path("assets/logo.png"),
