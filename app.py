@@ -4,8 +4,45 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from datetime import datetime
+from pathlib import Path
+
+
+def resolve_logo_path() -> Path | None:
+    explicit_candidates = [
+        Path("assets/boxland.png"),
+        Path("boxland.png"),
+        Path("assets/logo.png"),
+        Path("logo.png"),
+    ]
+    for candidate in explicit_candidates:
+        if candidate.exists():
+            return candidate
+
+    # Fallback: pick a likely image in root or assets even if filename casing differs.
+    search_dirs = [Path("."), Path("assets")]
+    for directory in search_dirs:
+        if directory.exists():
+            for file_path in directory.iterdir():
+                if not file_path.is_file():
+                    continue
+                suffix = file_path.suffix.lower()
+                if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                    continue
+                stem = file_path.stem.lower()
+                if "boxland" in stem or "logo" in stem:
+                    return file_path
+    return None
+
 
 st.set_page_config(page_title="Auction Dashboard", layout="wide")
+
+logo_path = resolve_logo_path()
+if logo_path:
+    left, center, right = st.columns([1, 2, 1])
+    with center:
+        st.image(str(logo_path), use_container_width=True)
+else:
+    st.caption("Logo not found. Add `boxland.png` to repo root or `assets/boxland.png`.")
 
 SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
 GID = "900908138"
@@ -90,7 +127,6 @@ logo_path = Path("assets/boxland.png")
 if logo_path.exists():
     st.image(str(logo_path), width=320)
 
-st.title("Auction / Facebook Marketplace Dashboard")
 st.caption("Auto-refreshes from Google Sheets. Data is cached for 1 hour.")
 
 with st.sidebar:
