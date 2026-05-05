@@ -91,6 +91,11 @@ def category_summary(df: pd.DataFrame) -> pd.DataFrame:
         .sort_values("total_revenue", ascending=False)
     )
 
+from pathlib import Path
+
+logo_path = Path("assets/boxland.png")
+if logo_path.exists():
+    st.image(str(logo_path), width=320)
 
 st.caption("Auto-refreshes from Google Sheets. Data is cached for 1 hour.")
 
