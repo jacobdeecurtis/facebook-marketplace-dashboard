@@ -2,10 +2,44 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import base64
 import streamlit as st
 from datetime import datetime
+from pathlib import Path
+
+
+LOGO_PATH = Path("assets/boxland2.png")
+LOGO_NAME_MARKERS = ("boxland", "logo")
+
+
+def render_centered_logo(logo_path: Path) -> None:
+    encoded_logo = base64.b64encode(logo_path.read_bytes()).decode("utf-8")
+    st.markdown(
+        f"""
+        <div style="display: flex; justify-content: center; margin-bottom: 1.5rem;">
+            <img src="data:image/png;base64,{encoded_logo}"
+                 alt="Boxland logo"
+                 style="width: 320px; max-width: 100%; height: auto;" />
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def ignore_later_logo_images(image, *args, **kwargs):
+    image_name = str(image).lower()
+    if any(marker in image_name for marker in LOGO_NAME_MARKERS):
+        return None
+    return _original_st_image(image, *args, **kwargs)
+
 
 st.set_page_config(page_title="Auction Dashboard", layout="wide")
+
+_original_st_image = st.image
+if LOGO_PATH.exists():
+    render_centered_logo(LOGO_PATH)
+    st.image = ignore_later_logo_images
+
 
 SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
 GID = "900908138"
@@ -85,7 +119,6 @@ def category_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-st.title("Auction / Facebook Marketplace Dashboard")
 st.caption("Auto-refreshes from Google Sheets. Data is cached for 1 hour.")
 
 with st.sidebar:
