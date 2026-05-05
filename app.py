@@ -19,7 +19,7 @@ def render_centered_logo(logo_path: Path) -> None:
         <div style="display: flex; justify-content: center; margin-bottom: 1.5rem;">
             <img src="data:image/png;base64,{encoded_logo}"
                  alt="Boxland logo"
-                 style="width: 320px; max-width: 100%; height: auto;" />
+                 style="width: 400px; max-width: 100%; height: auto;" />
         </div>
         """,
         unsafe_allow_html=True,
@@ -93,12 +93,18 @@ def summarize_by_auction(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.
     return summary.sort_values("Auction_Date")
 
 
-def daily_sales(df: pd.DataFrame) -> pd.DataFrame:
-    daily = df.dropna(subset=["sale_date"]).groupby("sale_date", as_index=False).agg(
-        revenue=("revenue", "sum"),
-        items_sold=("revenue", "count"),
+def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
+    weekly = (
+        df.dropna(subset=["sale_date"])
+        .groupby(pd.Grouper(key="sale_date", freq="W-SUN"))
+        .agg(
+            revenue=("revenue", "sum"),
+            items_sold=("revenue", "count"),
+        )
+        .reset_index()
+        .rename(columns={"sale_date": "week_ending"})
     )
-    return daily.sort_values("sale_date")
+    return weekly.sort_values("week_ending")
 
 
 def category_summary(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,7 +160,7 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
     filtered = filtered[(filtered["sale_date"].isna()) | ((filtered["sale_date"] >= start) & (filtered["sale_date"] <= end))]
 
 auction_summary = summarize_by_auction(filtered, df_auction_cost)
-daily = daily_sales(filtered)
+weekly = weekly_sales(filtered)
 
 sold_items = filtered[filtered["sale_date"].notna()].copy()
 total_revenue = sold_items["revenue"].sum()
@@ -179,20 +185,20 @@ tab_overview, tab_auctions, tab_categories, tab_recent, tab_raw = st.tabs([
 
 with tab_overview:
     st.subheader("Sales over time")
-    if not daily.empty:
-        fig = px.line(daily, x="sale_date", y="revenue", markers=True, title="Daily Revenue")
-        fig.update_layout(yaxis_title="Revenue", xaxis_title="Sale Date")
+    if not weekly.empty:
+        fig = px.line(weekly, x="week_ending", y="revenue", markers=True, title="Weekly Revenue")
+        fig.update_layout(yaxis_title="Revenue", xaxis_title="Week Ending")
         st.plotly_chart(fig, use_container_width=True)
 
-        daily["cumulative_revenue"] = daily["revenue"].cumsum()
-        fig2 = px.line(daily, x="sale_date", y="cumulative_revenue", markers=True, title="Cumulative Revenue")
-        fig2.update_layout(yaxis_title="Cumulative Revenue", xaxis_title="Sale Date")
+        weekly["cumulative_revenue"] = weekly["revenue"].cumsum()
+        fig2 = px.line(weekly, x="week_ending", y="cumulative_revenue", markers=True, title="Cumulative Weekly Revenue")
+        fig2.update_layout(yaxis_title="Cumulative Revenue", xaxis_title="Week Ending")
         st.plotly_chart(fig2, use_container_width=True)
     else:
         st.info("No sales found for this date range.")
 
-    st.subheader("Top revenue days")
-    st.dataframe(daily.sort_values("revenue", ascending=False).head(10), use_container_width=True)
+    st.subheader("Top revenue weeks")
+    st.dataframe(weekly.sort_values("revenue", ascending=False).head(10), use_container_width=True)
 
 with tab_auctions:
     st.subheader("Auction performance")
