@@ -71,19 +71,6 @@ def summarize_by_auction(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.
     return summary.sort_values("Auction_Date")
 
 
-def daily_sales(df: pd.DataFrame) -> pd.DataFrame:
-    daily = (
-        df.dropna(subset=["sale_date"])
-        .groupby("sale_date", as_index=False)
-        .agg(
-            revenue=("revenue", "sum"),
-            items_sold=("revenue", "count"),
-        )
-        .sort_values("sale_date")
-    )
-    return daily
-
-
 def format_week_label(row: pd.Series) -> str:
     start = row["week_start"]
     end = row["week_end"]
@@ -188,7 +175,6 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
     filtered = filtered[(filtered["sale_date"].isna()) | ((filtered["sale_date"] >= start) & (filtered["sale_date"] <= end))]
 
 auction_summary = summarize_by_auction(filtered, df_auction_cost)
-daily = daily_sales(filtered)
 weekly = weekly_sales(filtered)
 
 sold_items = filtered[filtered["sale_date"].notna()].copy()
@@ -214,7 +200,7 @@ tab_overview, tab_auctions, tab_categories, tab_recent, tab_raw = st.tabs([
 
 with tab_overview:
     st.subheader("Sales over time")
-    if not daily.empty:
+    if not weekly.empty:
         fig_weekly = px.bar(
             weekly,
             x="week_label",
@@ -226,10 +212,6 @@ with tab_overview:
         fig_weekly.update_traces(textposition="outside", cliponaxis=False)
         fig_weekly.update_layout(yaxis_title="Revenue", xaxis_title="Week", xaxis_tickangle=-45)
         st.plotly_chart(fig_weekly, use_container_width=True)
-
-        fig = px.line(daily, x="sale_date", y="revenue", markers=True, title="Daily Revenue")
-        fig.update_layout(yaxis_title="Revenue", xaxis_title="Sale Date")
-        st.plotly_chart(fig, use_container_width=True)
 
         weekly["cumulative_revenue"] = weekly["revenue"].cumsum()
         fig2 = px.line(weekly, x="week_end", y="cumulative_revenue", markers=True, title="Cumulative Weekly Revenue")
