@@ -7,31 +7,21 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import base64
 import streamlit as st
 
 st.set_page_config(page_title="Auction Dashboard", layout="wide")
 
 APP_DIR = Path(__file__).parent
-LOGO_PATH = APP_DIR / "boxland.png"
-LOGO_WIDTH = "min(100vw, 1400px)"
-HEADER_IMAGE_PATHS = (
-    LOGO_PATH,
-    APP_DIR / "assets" / "boxland.png",
-    APP_DIR / "assets" / "boxland2.png",
-)
-HEADER_IMAGE_WIDTH = LOGO_WIDTH
-
-SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
-GID = "900908138"
-CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
-APP_DIR = Path(__file__).parent
+HEADER_IMAGE_WIDTH = "min(50vw, 700px)"
 HEADER_IMAGE_PATHS = (
     APP_DIR / "boxland.png",
     APP_DIR / "assets" / "boxland.png",
     APP_DIR / "assets" / "boxland2.png",
 )
-HEADER_IMAGE_WIDTH = "min(100vw, 1400px)"
+
+SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
+GID = "900908138"
+CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
 
 AUCTION_COSTS = {
     "Auction_Date": [
@@ -81,74 +71,17 @@ def summarize_by_auction(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.
     return summary.sort_values("Auction_Date")
 
 
-def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
-    weekly = (
+def daily_sales(df: pd.DataFrame) -> pd.DataFrame:
+    daily = (
         df.dropna(subset=["sale_date"])
-        .groupby(pd.Grouper(key="sale_date", freq="W-SUN"))
+        .groupby("sale_date", as_index=False)
         .agg(
             revenue=("revenue", "sum"),
             items_sold=("revenue", "count"),
         )
-        .reset_index()
-        .rename(columns={"sale_date": "week_ending"})
+        .sort_values("sale_date")
     )
-    return weekly.sort_values("week_ending")
-
-
-def format_week_label(row: pd.Series) -> str:
-    start = row["week_start"]
-    end = row["week_end"]
-    start_label = f"{start:%b} {start.day}"
-    end_label = f"{end:%b} {end.day}"
-    return f"{start_label}–{end_label}"
-
-
-def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
-    weekly = df.dropna(subset=["sale_date"]).copy()
-    if weekly.empty:
-        return pd.DataFrame(columns=["week_start", "week_end", "week_label", "revenue", "items_sold", "revenue_label"])
-
-    weekly["week_start"] = weekly["sale_date"].dt.to_period("W-SUN").apply(lambda period: period.start_time)
-    weekly = (
-        weekly.groupby("week_start", as_index=False)
-        .agg(
-            revenue=("revenue", "sum"),
-            items_sold=("revenue", "count"),
-        )
-        .sort_values("week_start")
-    )
-    weekly["week_end"] = weekly["week_start"] + pd.Timedelta(days=6)
-    weekly["week_label"] = weekly.apply(format_week_label, axis=1)
-    weekly["revenue_label"] = weekly["revenue"].map(lambda value: f"${value:,.0f}")
-    return weekly
-
-
-def format_week_label(row: pd.Series) -> str:
-    start = row["week_start"]
-    end = row["week_end"]
-    start_label = f"{start:%b} {start.day}"
-    end_label = f"{end:%b} {end.day}"
-    return f"{start_label}–{end_label}"
-
-
-def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
-    weekly = df.dropna(subset=["sale_date"]).copy()
-    if weekly.empty:
-        return pd.DataFrame(columns=["week_start", "week_end", "week_label", "revenue", "items_sold", "revenue_label"])
-
-    weekly["week_start"] = weekly["sale_date"].dt.to_period("W-SUN").apply(lambda period: period.start_time)
-    weekly = (
-        weekly.groupby("week_start", as_index=False)
-        .agg(
-            revenue=("revenue", "sum"),
-            items_sold=("revenue", "count"),
-        )
-        .sort_values("week_start")
-    )
-    weekly["week_end"] = weekly["week_start"] + pd.Timedelta(days=6)
-    weekly["week_label"] = weekly.apply(format_week_label, axis=1)
-    weekly["revenue_label"] = weekly["revenue"].map(lambda value: f"${value:,.0f}")
-    return weekly
+    return daily
 
 
 def format_week_label(row: pd.Series) -> str:
@@ -195,32 +128,6 @@ def category_summary(df: pd.DataFrame) -> pd.DataFrame:
         )
         .sort_values("total_revenue", ascending=False)
     )
-
-from pathlib import Path
-
-logo_path = Path("assets/boxland.png")
-if logo_path.exists():
-    st.image(str(logo_path), width=320)
-
-def render_header() -> None:
-    if LOGO_PATH.exists():
-        encoded_logo = base64.b64encode(LOGO_PATH.read_bytes()).decode("utf-8")
-        st.markdown(
-            f"""
-            <div style="display: flex; justify-content: center; margin-bottom: 1rem;">
-                <img src="data:image/png;base64,{encoded_logo}"
-                     alt="Boxland logo"
-                     style="width: {LOGO_WIDTH}; max-width: 100vw; height: auto;" />
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        st.warning("Header image `boxland.png` was not found next to `app.py`.")
-
-
-def find_header_image() -> Path | None:
-    return next((path for path in HEADER_IMAGE_PATHS if path.exists()), None)
 
 def find_header_image() -> Path | None:
     return next((path for path in HEADER_IMAGE_PATHS if path.exists()), None)
@@ -325,7 +232,7 @@ with tab_overview:
         st.plotly_chart(fig, use_container_width=True)
 
         weekly["cumulative_revenue"] = weekly["revenue"].cumsum()
-        fig2 = px.line(weekly, x="week_ending", y="cumulative_revenue", markers=True, title="Cumulative Weekly Revenue")
+        fig2 = px.line(weekly, x="week_end", y="cumulative_revenue", markers=True, title="Cumulative Weekly Revenue")
         fig2.update_layout(yaxis_title="Cumulative Revenue", xaxis_title="Week Ending")
         st.plotly_chart(fig2, use_container_width=True)
     else:
