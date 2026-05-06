@@ -1,15 +1,26 @@
+import base64
+import mimetypes
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-from datetime import datetime
 
 st.set_page_config(page_title="Auction Dashboard", layout="wide")
 
 SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
 GID = "900908138"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
+APP_DIR = Path(__file__).parent
+HEADER_IMAGE_PATHS = (
+    APP_DIR / "boxland.png",
+    APP_DIR / "assets" / "boxland.png",
+    APP_DIR / "assets" / "boxland2.png",
+)
+HEADER_IMAGE_WIDTH = "min(100vw, 1400px)"
 
 AUCTION_COSTS = {
     "Auction_Date": [
@@ -67,6 +78,34 @@ def daily_sales(df: pd.DataFrame) -> pd.DataFrame:
     return daily.sort_values("sale_date")
 
 
+def format_week_label(row: pd.Series) -> str:
+    start = row["week_start"]
+    end = row["week_end"]
+    start_label = f"{start:%b} {start.day}"
+    end_label = f"{end:%b} {end.day}"
+    return f"{start_label}–{end_label}"
+
+
+def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
+    weekly = df.dropna(subset=["sale_date"]).copy()
+    if weekly.empty:
+        return pd.DataFrame(columns=["week_start", "week_end", "week_label", "revenue", "items_sold", "revenue_label"])
+
+    weekly["week_start"] = weekly["sale_date"].dt.to_period("W-SUN").apply(lambda period: period.start_time)
+    weekly = (
+        weekly.groupby("week_start", as_index=False)
+        .agg(
+            revenue=("revenue", "sum"),
+            items_sold=("revenue", "count"),
+        )
+        .sort_values("week_start")
+    )
+    weekly["week_end"] = weekly["week_start"] + pd.Timedelta(days=6)
+    weekly["week_label"] = weekly.apply(format_week_label, axis=1)
+    weekly["revenue_label"] = weekly["revenue"].map(lambda value: f"${value:,.0f}")
+    return weekly
+
+
 def category_summary(df: pd.DataFrame) -> pd.DataFrame:
     data = df.copy()
     if "product_category" not in data.columns:
@@ -85,7 +124,35 @@ def category_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-st.title("Auction / Facebook Marketplace Dashboard")
+def find_header_image() -> Path | None:
+    return next((path for path in HEADER_IMAGE_PATHS if path.exists()), None)
+
+
+def image_data_uri(image_path: Path) -> str:
+    mime_type = mimetypes.guess_type(image_path.name)[0] or "image/png"
+    encoded_image = base64.b64encode(image_path.read_bytes()).decode("utf-8")
+    return f"data:{mime_type};base64,{encoded_image}"
+
+
+def render_header() -> None:
+    header_image = find_header_image()
+    if header_image is None:
+        st.warning("Header image `boxland.png` was not found next to `app.py` or in `assets/`.")
+        return
+
+    st.markdown(
+        f"""
+        <div style="display: flex; justify-content: center; margin-bottom: 1rem;">
+            <img src="{image_data_uri(header_image)}"
+                 alt="Boxland logo"
+                 style="width: {HEADER_IMAGE_WIDTH}; max-width: 100vw; height: auto;" />
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+render_header()
 st.caption("Auto-refreshes from Google Sheets. Data is cached for 1 hour.")
 
 with st.sidebar:
@@ -117,6 +184,7 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 
 auction_summary = summarize_by_auction(filtered, df_auction_cost)
 daily = daily_sales(filtered)
+weekly = weekly_sales(filtered)
 
 sold_items = filtered[filtered["sale_date"].notna()].copy()
 total_revenue = sold_items["revenue"].sum()
@@ -142,6 +210,18 @@ tab_overview, tab_auctions, tab_categories, tab_recent, tab_raw = st.tabs([
 with tab_overview:
     st.subheader("Sales over time")
     if not daily.empty:
+        fig_weekly = px.bar(
+            weekly,
+            x="week_label",
+            y="revenue",
+            text="revenue_label",
+            title="Weekly Revenue",
+            hover_data={"week_label": True, "revenue": ":$,.0f", "items_sold": True},
+        )
+        fig_weekly.update_traces(textposition="outside", cliponaxis=False)
+        fig_weekly.update_layout(yaxis_title="Revenue", xaxis_title="Week", xaxis_tickangle=-45)
+        st.plotly_chart(fig_weekly, use_container_width=True)
+
         fig = px.line(daily, x="sale_date", y="revenue", markers=True, title="Daily Revenue")
         fig.update_layout(yaxis_title="Revenue", xaxis_title="Sale Date")
         st.plotly_chart(fig, use_container_width=True)
