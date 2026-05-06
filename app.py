@@ -12,11 +12,15 @@ import streamlit as st
 
 st.set_page_config(page_title="Auction Dashboard", layout="wide")
 
-_original_st_image = st.image
-if LOGO_PATH.exists():
-    render_centered_logo(LOGO_PATH)
-    st.image = ignore_later_logo_images
-
+APP_DIR = Path(__file__).parent
+LOGO_PATH = APP_DIR / "boxland.png"
+LOGO_WIDTH = "min(100vw, 1400px)"
+HEADER_IMAGE_PATHS = (
+    LOGO_PATH,
+    APP_DIR / "assets" / "boxland.png",
+    APP_DIR / "assets" / "boxland2.png",
+)
+HEADER_IMAGE_WIDTH = LOGO_WIDTH
 
 SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
 GID = "900908138"
@@ -147,6 +151,34 @@ def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
     return weekly
 
 
+def format_week_label(row: pd.Series) -> str:
+    start = row["week_start"]
+    end = row["week_end"]
+    start_label = f"{start:%b} {start.day}"
+    end_label = f"{end:%b} {end.day}"
+    return f"{start_label}–{end_label}"
+
+
+def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
+    weekly = df.dropna(subset=["sale_date"]).copy()
+    if weekly.empty:
+        return pd.DataFrame(columns=["week_start", "week_end", "week_label", "revenue", "items_sold", "revenue_label"])
+
+    weekly["week_start"] = weekly["sale_date"].dt.to_period("W-SUN").apply(lambda period: period.start_time)
+    weekly = (
+        weekly.groupby("week_start", as_index=False)
+        .agg(
+            revenue=("revenue", "sum"),
+            items_sold=("revenue", "count"),
+        )
+        .sort_values("week_start")
+    )
+    weekly["week_end"] = weekly["week_start"] + pd.Timedelta(days=6)
+    weekly["week_label"] = weekly.apply(format_week_label, axis=1)
+    weekly["revenue_label"] = weekly["revenue"].map(lambda value: f"${value:,.0f}")
+    return weekly
+
+
 def category_summary(df: pd.DataFrame) -> pd.DataFrame:
     data = df.copy()
     if "product_category" not in data.columns:
@@ -186,6 +218,9 @@ def render_header() -> None:
     else:
         st.warning("Header image `boxland.png` was not found next to `app.py`.")
 
+
+def find_header_image() -> Path | None:
+    return next((path for path in HEADER_IMAGE_PATHS if path.exists()), None)
 
 def find_header_image() -> Path | None:
     return next((path for path in HEADER_IMAGE_PATHS if path.exists()), None)
