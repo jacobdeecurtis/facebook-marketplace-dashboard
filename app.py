@@ -1,37 +1,13 @@
+import base64
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import base64
 import streamlit as st
-from datetime import datetime
-from pathlib import Path
-
-
-LOGO_PATH = Path("assets/boxland2.png")
-LOGO_NAME_MARKERS = ("boxland", "logo")
-
-
-def render_centered_logo(logo_path: Path) -> None:
-    encoded_logo = base64.b64encode(logo_path.read_bytes()).decode("utf-8")
-    st.markdown(
-        f"""
-        <div style="display: flex; justify-content: center; margin-bottom: 1.5rem;">
-            <img src="data:image/png;base64,{encoded_logo}"
-                 alt="Boxland logo"
-                 style="width: 400px; max-width: 100%; height: auto;" />
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def ignore_later_logo_images(image, *args, **kwargs):
-    image_name = str(image).lower()
-    if any(marker in image_name for marker in LOGO_NAME_MARKERS):
-        return None
-    return _original_st_image(image, *args, **kwargs)
-
 
 st.set_page_config(page_title="Auction Dashboard", layout="wide")
 
@@ -44,6 +20,8 @@ if LOGO_PATH.exists():
 SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
 GID = "900908138"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
+LOGO_PATH = Path(__file__).with_name("boxland.png")
+LOGO_WIDTH = "min(100vw, 1400px)"
 
 AUCTION_COSTS = {
     "Auction_Date": [
@@ -107,6 +85,34 @@ def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
     return weekly.sort_values("week_ending")
 
 
+def format_week_label(row: pd.Series) -> str:
+    start = row["week_start"]
+    end = row["week_end"]
+    start_label = f"{start:%b} {start.day}"
+    end_label = f"{end:%b} {end.day}"
+    return f"{start_label}–{end_label}"
+
+
+def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
+    weekly = df.dropna(subset=["sale_date"]).copy()
+    if weekly.empty:
+        return pd.DataFrame(columns=["week_start", "week_end", "week_label", "revenue", "items_sold", "revenue_label"])
+
+    weekly["week_start"] = weekly["sale_date"].dt.to_period("W-SUN").apply(lambda period: period.start_time)
+    weekly = (
+        weekly.groupby("week_start", as_index=False)
+        .agg(
+            revenue=("revenue", "sum"),
+            items_sold=("revenue", "count"),
+        )
+        .sort_values("week_start")
+    )
+    weekly["week_end"] = weekly["week_start"] + pd.Timedelta(days=6)
+    weekly["week_label"] = weekly.apply(format_week_label, axis=1)
+    weekly["revenue_label"] = weekly["revenue"].map(lambda value: f"${value:,.0f}")
+    return weekly
+
+
 def category_summary(df: pd.DataFrame) -> pd.DataFrame:
     data = df.copy()
     if "product_category" not in data.columns:
@@ -130,6 +136,24 @@ logo_path = Path("assets/boxland.png")
 if logo_path.exists():
     st.image(str(logo_path), width=320)
 
+def render_header() -> None:
+    if LOGO_PATH.exists():
+        encoded_logo = base64.b64encode(LOGO_PATH.read_bytes()).decode("utf-8")
+        st.markdown(
+            f"""
+            <div style="display: flex; justify-content: center; margin-bottom: 1rem;">
+                <img src="data:image/png;base64,{encoded_logo}"
+                     alt="Boxland logo"
+                     style="width: {LOGO_WIDTH}; max-width: 100vw; height: auto;" />
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.warning("Header image `boxland.png` was not found next to `app.py`.")
+
+
+render_header()
 st.caption("Auto-refreshes from Google Sheets. Data is cached for 1 hour.")
 
 with st.sidebar:
@@ -160,6 +184,7 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
     filtered = filtered[(filtered["sale_date"].isna()) | ((filtered["sale_date"] >= start) & (filtered["sale_date"] <= end))]
 
 auction_summary = summarize_by_auction(filtered, df_auction_cost)
+daily = daily_sales(filtered)
 weekly = weekly_sales(filtered)
 
 sold_items = filtered[filtered["sale_date"].notna()].copy()
@@ -185,9 +210,21 @@ tab_overview, tab_auctions, tab_categories, tab_recent, tab_raw = st.tabs([
 
 with tab_overview:
     st.subheader("Sales over time")
-    if not weekly.empty:
-        fig = px.line(weekly, x="week_ending", y="revenue", markers=True, title="Weekly Revenue")
-        fig.update_layout(yaxis_title="Revenue", xaxis_title="Week Ending")
+    if not daily.empty:
+        fig_weekly = px.bar(
+            weekly,
+            x="week_label",
+            y="revenue",
+            text="revenue_label",
+            title="Weekly Revenue",
+            hover_data={"week_label": True, "revenue": ":$,.0f", "items_sold": True},
+        )
+        fig_weekly.update_traces(textposition="outside", cliponaxis=False)
+        fig_weekly.update_layout(yaxis_title="Revenue", xaxis_title="Week", xaxis_tickangle=-45)
+        st.plotly_chart(fig_weekly, use_container_width=True)
+
+        fig = px.line(daily, x="sale_date", y="revenue", markers=True, title="Daily Revenue")
+        fig.update_layout(yaxis_title="Revenue", xaxis_title="Sale Date")
         st.plotly_chart(fig, use_container_width=True)
 
         weekly["cumulative_revenue"] = weekly["revenue"].cumsum()
