@@ -21,7 +21,9 @@ HEADER_IMAGE_PATHS = (
 
 SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
 GID = "900908138"
+LISTINGS_GID = "944629416"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
+LISTINGS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={LISTINGS_GID}"
 
 AUCTION_COSTS = {
     "Auction_Date": [
@@ -54,6 +56,77 @@ def import_auction_data() -> tuple[pd.DataFrame, pd.DataFrame]:
 
     merged_df = pd.merge(df_google_sheet, df_auction_cost, on="Auction_Date", how="left")
     return merged_df, df_auction_cost
+
+
+@st.cache_data(ttl=3600)
+def import_listings_data() -> pd.DataFrame:
+    """Loads Marketplace listing data from the Listings Google Sheet tab."""
+    df_listings = pd.read_csv(LISTINGS_CSV_URL)
+    if "Listing_Date" not in df_listings.columns:
+        return pd.DataFrame(columns=["Listing_Date"])
+
+    df_listings["Listing_Date"] = pd.to_datetime(df_listings["Listing_Date"], errors="coerce")
+    df_listings = df_listings.dropna(subset=["Listing_Date"]).copy()
+    df_listings["Listing_Date"] = df_listings["Listing_Date"].dt.normalize()
+    return df_listings
+
+
+def daily_listing_counts(df_listings: pd.DataFrame, plot_start_date: pd.Timestamp) -> pd.DataFrame:
+    """Returns one row per calendar day with the number of listings posted that day."""
+    if df_listings.empty or "Listing_Date" not in df_listings.columns:
+        return pd.DataFrame(columns=["Listing_Date", "number_of_listings"])
+
+    listing_dates = df_listings.dropna(subset=["Listing_Date"]).copy()
+    if listing_dates.empty:
+        return pd.DataFrame(columns=["Listing_Date", "number_of_listings"])
+
+    daily_counts = (
+        listing_dates.groupby("Listing_Date")
+        .size()
+        .reset_index(name="number_of_listings")
+    )
+    full_date_range = pd.date_range(
+        start=listing_dates["Listing_Date"].min(),
+        end=listing_dates["Listing_Date"].max(),
+        freq="D",
+    )
+    all_daily_listings = (
+        pd.DataFrame({"Listing_Date": full_date_range})
+        .merge(daily_counts, on="Listing_Date", how="left")
+    )
+    all_daily_listings["number_of_listings"] = (
+        all_daily_listings["number_of_listings"].fillna(0).astype(int)
+    )
+    return all_daily_listings[all_daily_listings["Listing_Date"] >= plot_start_date]
+
+
+def build_daily_listings_figure(daily_listings: pd.DataFrame) -> go.Figure:
+    fig = go.Figure(
+        data=[
+            go.Scatter(
+                x=daily_listings["Listing_Date"],
+                y=daily_listings["number_of_listings"],
+                mode="lines+markers+text",
+                name="Number of Listings",
+                text=daily_listings["number_of_listings"],
+                textposition="top center",
+                hovertemplate=(
+                    "<b>Date</b>: %{x|%Y-%m-%d}<br>"
+                    "<b>Listings</b>: %{y}<extra></extra>"
+                ),
+            )
+        ]
+    )
+    fig.update_layout(
+        title_text="Number of Listings Per Day Starting 2026-04-30",
+        xaxis_title="Date",
+        yaxis_title="Number of Listings",
+        hovermode="x unified",
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        xaxis=dict(tickformat="%Y-%m-%d", dtick="D1"),
+    )
+    return fig
 
 
 def summarize_by_auction(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.DataFrame:
@@ -360,8 +433,8 @@ c5.metric("Profit / Cost", "N/A" if np.isnan(profit_to_cost) else f"{profit_to_c
 
 st.divider()
 
-tab_overview, tab_auctions, tab_categories, tab_recent, tab_raw = st.tabs([
-    "Overview", "By auction", "Categories", "Recent sales", "Raw data"
+tab_overview, tab_auctions, tab_listings, tab_categories, tab_recent, tab_raw = st.tabs([
+    "Overview", "By auction", "Listings", "Categories", "Recent sales", "Raw data"
 ])
 
 with tab_overview:
@@ -408,6 +481,27 @@ with tab_auctions:
         }),
         use_container_width=True,
     )
+
+with tab_listings:
+    st.subheader("Listings per day")
+    plot_start_date = pd.to_datetime("2026-04-30")
+
+    try:
+        df_listings = import_listings_data()
+    except Exception as e:
+        st.error("Could not load the Listings Google Sheet tab. Make sure the sheet is shared/public or accessible as CSV.")
+        st.exception(e)
+        df_listings = pd.DataFrame()
+
+    if not df_listings.empty:
+        daily_listings = daily_listing_counts(df_listings, plot_start_date)
+        if not daily_listings.empty:
+            st.plotly_chart(build_daily_listings_figure(daily_listings), use_container_width=True)
+            st.dataframe(daily_listings, use_container_width=True)
+        else:
+            st.info(f"No listings found on or after {plot_start_date:%Y-%m-%d}.")
+    else:
+        st.info("Listings data is empty, so there is nothing to chart.")
 
 with tab_categories:
     st.subheader("Category performance")
