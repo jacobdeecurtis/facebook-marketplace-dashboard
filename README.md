@@ -33,7 +33,7 @@ You can change the refresh interval by editing the `ttl` value in `app.py`.
 The dashboard intentionally keeps only the useful high-level pieces:
 
 - revenue, cost, profit, item count, profit-to-cost
-- weekly revenue and cumulative weekly revenue
+- weekly revenue and daily cumulative profit with linear and polynomial projections
 - auction-level performance
 - category-level performance
 - recent sales

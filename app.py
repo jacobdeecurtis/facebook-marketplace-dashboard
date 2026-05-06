@@ -99,6 +99,172 @@ def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
     return weekly
 
 
+def daily_profit(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.DataFrame:
+    sales = (
+        df.dropna(subset=["sale_date"])
+        .groupby("sale_date", as_index=False)["revenue"]
+        .sum()
+        .rename(columns={"sale_date": "date", "revenue": "daily_revenue"})
+    )
+    costs = (
+        df_auction_cost.dropna(subset=["Auction_Date"])
+        .groupby("Auction_Date", as_index=False)["auction_cost"]
+        .sum()
+        .rename(columns={"Auction_Date": "date", "auction_cost": "daily_auction_cost"})
+    )
+
+    if sales.empty and costs.empty:
+        return pd.DataFrame(columns=[
+            "date",
+            "daily_revenue",
+            "daily_auction_cost",
+            "daily_net_profit",
+            "cumulative_net_profit",
+        ])
+
+    min_date = min(
+        value
+        for value in [
+            sales["date"].min() if not sales.empty else pd.NaT,
+            costs["date"].min() if not costs.empty else pd.NaT,
+        ]
+        if pd.notna(value)
+    )
+    max_date = max(
+        value
+        for value in [
+            sales["date"].max() if not sales.empty else pd.NaT,
+            costs["date"].max() if not costs.empty else pd.NaT,
+        ]
+        if pd.notna(value)
+    )
+
+    daily = pd.DataFrame({"date": pd.date_range(start=min_date, end=max_date, freq="D")})
+    daily = daily.merge(sales, on="date", how="left").merge(costs, on="date", how="left")
+    daily[["daily_revenue", "daily_auction_cost"]] = daily[["daily_revenue", "daily_auction_cost"]].fillna(0)
+    daily["daily_net_profit"] = daily["daily_revenue"] - daily["daily_auction_cost"]
+    daily["cumulative_net_profit"] = daily["daily_net_profit"].cumsum()
+    return daily
+
+
+def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
+    projection_target_date = datetime(2026, 8, 19)
+    actual = daily.sort_values("date").copy()
+    projection_end_date = max(projection_target_date, actual["date"].max())
+
+    fig = px.line(
+        actual,
+        x="date",
+        y="cumulative_net_profit",
+        title="Overall Cumulative Net Profit Over Time with Linear and Polynomial Regression Projections",
+    )
+    fig.update_traces(name="Actual", showlegend=True, line=dict(color="#636EFA"))
+
+    if len(actual) >= 2:
+        actual["date_ordinal"] = actual["date"].map(datetime.toordinal)
+        x = actual["date_ordinal"].to_numpy(dtype=float)
+        y = actual["cumulative_net_profit"].to_numpy(dtype=float)
+        x_anchor = x.min()
+        x_centered = x - x_anchor
+        projection_dates = pd.date_range(start=actual["date"].min(), end=projection_end_date, freq="D")
+        projection_x = np.array([date.toordinal() for date in projection_dates], dtype=float) - x_anchor
+
+        linear_coefficients = np.polyfit(x_centered, y, deg=1)
+        predicted_profit_linear = np.polyval(linear_coefficients, projection_x)
+
+        polynomial_degree = min(2, len(actual) - 1)
+        polynomial_coefficients = np.polyfit(x_centered, y, deg=polynomial_degree)
+        predicted_profit_polynomial = np.polyval(polynomial_coefficients, projection_x)
+
+        fig.add_trace(go.Scatter(
+            x=projection_dates,
+            y=predicted_profit_linear,
+            mode="lines",
+            name="Linear",
+            line=dict(dash="dot", color="red"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=projection_dates,
+            y=predicted_profit_polynomial,
+            mode="lines",
+            name="Polynomial",
+            line=dict(dash="dot", color="blue"),
+        ))
+
+        peaks = actual[
+            (actual["cumulative_net_profit"].shift(1) < actual["cumulative_net_profit"])
+            & (actual["cumulative_net_profit"].shift(-1) < actual["cumulative_net_profit"])
+        ].copy()
+        if peaks.empty or len(peaks) < 2:
+            last_point = actual.iloc[[-1]].copy()
+            if peaks.empty or not (peaks["date"] == last_point["date"].iloc[0]).any():
+                peaks = pd.concat([peaks, last_point])
+
+        if not peaks.empty:
+            fig.add_trace(go.Scatter(
+                x=peaks["date"],
+                y=peaks["cumulative_net_profit"],
+                mode="text",
+                text=peaks["cumulative_net_profit"].map(lambda value: f"${value:,.0f}"),
+                textposition="top center",
+                showlegend=False,
+                name="Peaks",
+                textfont=dict(color="darkred", size=10),
+            ))
+
+        estimated_profit_linear = predicted_profit_linear[-1]
+        estimated_profit_polynomial = predicted_profit_polynomial[-1]
+        fig.add_trace(go.Scatter(
+            x=[projection_end_date],
+            y=[estimated_profit_linear],
+            mode="text",
+            text=[f"Linear: ${estimated_profit_linear:,.0f}"],
+            textposition="bottom right",
+            showlegend=False,
+            name="Linear Estimate",
+            textfont=dict(color="red", size=10, weight="bold"),
+        ))
+        fig.add_trace(go.Scatter(
+            x=[projection_end_date],
+            y=[estimated_profit_polynomial],
+            mode="text",
+            text=[f"Poly: ${estimated_profit_polynomial:,.0f}"],
+            textposition="top right",
+            showlegend=False,
+            name="Polynomial Estimate",
+            textfont=dict(color="blue", size=10, weight="bold"),
+        ))
+
+    last_actual = actual.iloc[-1]
+    fig.add_trace(go.Scatter(
+        x=[last_actual["date"]],
+        y=[last_actual["cumulative_net_profit"]],
+        mode="text",
+        text=[f"Actual: ${last_actual['cumulative_net_profit']:,.0f}"],
+        textposition="bottom center",
+        showlegend=False,
+        name="Last Actual Profit",
+        textfont=dict(color="green", size=10, weight="bold"),
+    ))
+
+    fig.add_shape(
+        type="line",
+        x0=actual["date"].min(),
+        y0=0,
+        x1=projection_end_date,
+        y1=0,
+        line=dict(color="Grey", width=2, dash="dash"),
+    )
+    fig.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Cumulative Net Profit",
+        hovermode="x unified",
+        yaxis=dict(tickformat="$,.0f"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    return fig
+
 def category_summary(df: pd.DataFrame) -> pd.DataFrame:
     data = df.copy()
     if "product_category" not in data.columns:
@@ -213,15 +379,15 @@ with tab_overview:
         fig_weekly.update_layout(yaxis_title="Revenue", xaxis_title="Week", xaxis_tickangle=-45)
         st.plotly_chart(fig_weekly, use_container_width=True)
 
-        weekly["cumulative_revenue"] = weekly["revenue"].cumsum()
-        fig2 = px.line(weekly, x="week_end", y="cumulative_revenue", markers=True, title="Cumulative Weekly Revenue")
-        fig2.update_layout(yaxis_title="Cumulative Revenue", xaxis_title="Week Ending")
-        st.plotly_chart(fig2, use_container_width=True)
     else:
         st.info("No sales found for this date range.")
 
-    st.subheader("Top revenue weeks")
-    st.dataframe(weekly.sort_values("revenue", ascending=False).head(10), use_container_width=True)
+    st.subheader("Daily cumulative profit")
+    profit_daily = daily_profit(filtered, df_auction_cost)
+    if not profit_daily.empty:
+        st.plotly_chart(build_cumulative_profit_projection(profit_daily), use_container_width=True)
+    else:
+        st.info("No profit data found for this date range.")
 
 with tab_auctions:
     st.subheader("Auction performance")
