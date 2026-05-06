@@ -6,9 +6,16 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import base64
 import streamlit as st
 
 st.set_page_config(page_title="Auction Dashboard", layout="wide")
+
+_original_st_image = st.image
+if LOGO_PATH.exists():
+    render_centered_logo(LOGO_PATH)
+    st.image = ignore_later_logo_images
+
 
 SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
 GID = "900908138"
@@ -64,12 +71,18 @@ def summarize_by_auction(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.
     return summary.sort_values("Auction_Date")
 
 
-def daily_sales(df: pd.DataFrame) -> pd.DataFrame:
-    daily = df.dropna(subset=["sale_date"]).groupby("sale_date", as_index=False).agg(
-        revenue=("revenue", "sum"),
-        items_sold=("revenue", "count"),
+def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
+    weekly = (
+        df.dropna(subset=["sale_date"])
+        .groupby(pd.Grouper(key="sale_date", freq="W-SUN"))
+        .agg(
+            revenue=("revenue", "sum"),
+            items_sold=("revenue", "count"),
+        )
+        .reset_index()
+        .rename(columns={"sale_date": "week_ending"})
     )
-    return daily.sort_values("sale_date")
+    return weekly.sort_values("week_ending")
 
 
 def format_week_label(row: pd.Series) -> str:
@@ -117,6 +130,11 @@ def category_summary(df: pd.DataFrame) -> pd.DataFrame:
         .sort_values("total_revenue", ascending=False)
     )
 
+from pathlib import Path
+
+logo_path = Path("assets/boxland.png")
+if logo_path.exists():
+    st.image(str(logo_path), width=320)
 
 def render_header() -> None:
     if LOGO_PATH.exists():
@@ -209,15 +227,15 @@ with tab_overview:
         fig.update_layout(yaxis_title="Revenue", xaxis_title="Sale Date")
         st.plotly_chart(fig, use_container_width=True)
 
-        daily["cumulative_revenue"] = daily["revenue"].cumsum()
-        fig2 = px.line(daily, x="sale_date", y="cumulative_revenue", markers=True, title="Cumulative Revenue")
-        fig2.update_layout(yaxis_title="Cumulative Revenue", xaxis_title="Sale Date")
+        weekly["cumulative_revenue"] = weekly["revenue"].cumsum()
+        fig2 = px.line(weekly, x="week_ending", y="cumulative_revenue", markers=True, title="Cumulative Weekly Revenue")
+        fig2.update_layout(yaxis_title="Cumulative Revenue", xaxis_title="Week Ending")
         st.plotly_chart(fig2, use_container_width=True)
     else:
         st.info("No sales found for this date range.")
 
-    st.subheader("Top revenue days")
-    st.dataframe(daily.sort_values("revenue", ascending=False).head(10), use_container_width=True)
+    st.subheader("Top revenue weeks")
+    st.dataframe(weekly.sort_values("revenue", ascending=False).head(10), use_container_width=True)
 
 with tab_auctions:
     st.subheader("Auction performance")
