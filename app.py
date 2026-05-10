@@ -65,6 +65,8 @@ def import_listings_data() -> pd.DataFrame:
     if "Listing_Date" not in df_listings.columns:
         return pd.DataFrame(columns=["Listing_Date"])
 
+    if "Auction_Date" in df_listings.columns:
+        df_listings["Auction_Date"] = pd.to_datetime(df_listings["Auction_Date"], errors="coerce")
     df_listings["Listing_Date"] = pd.to_datetime(df_listings["Listing_Date"], errors="coerce")
     df_listings = df_listings.dropna(subset=["Listing_Date"]).copy()
     df_listings["Listing_Date"] = df_listings["Listing_Date"].dt.normalize()
@@ -129,6 +131,136 @@ def build_daily_listings_figure(daily_listings: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def normalize_match_text(series: pd.Series) -> pd.Series:
+    return (
+        series.fillna("")
+        .astype(str)
+        .str.strip()
+        .str.casefold()
+        .str.replace(r"\s+", " ", regex=True)
+    )
+
+
+def listing_to_sale_records(df_sales: pd.DataFrame, df_listings: pd.DataFrame) -> pd.DataFrame:
+    """Matches sold items to listing rows and returns days from listing to sale."""
+    required_sales = {"Auction_Date", "Title", "sale_date"}
+    required_listings = {"Auction_Date", "Title", "Listing_Date"}
+    if (
+        df_sales.empty
+        or df_listings.empty
+        or not required_sales.issubset(df_sales.columns)
+        or not required_listings.issubset(df_listings.columns)
+    ):
+        return pd.DataFrame(columns=[
+            "sale_date",
+            "Listing_Date",
+            "Title",
+            "product_category",
+            "revenue",
+            "days_to_sale",
+        ])
+
+    sales = df_sales.dropna(subset=["Auction_Date", "Title", "sale_date"]).copy()
+    listings = df_listings.dropna(subset=["Auction_Date", "Title", "Listing_Date"]).copy()
+    if sales.empty or listings.empty:
+        return pd.DataFrame(columns=[
+            "sale_date",
+            "Listing_Date",
+            "Title",
+            "product_category",
+            "revenue",
+            "days_to_sale",
+        ])
+
+    sales["_match_title"] = normalize_match_text(sales["Title"])
+    listings["_match_title"] = normalize_match_text(listings["Title"])
+    sales["_match_auction_date"] = sales["Auction_Date"].dt.normalize()
+    listings["_match_auction_date"] = listings["Auction_Date"].dt.normalize()
+    sales = sales.sort_values(["_match_auction_date", "_match_title", "sale_date"])
+    listings = listings.sort_values(["_match_auction_date", "_match_title", "Listing_Date"])
+    match_keys = ["_match_auction_date", "_match_title"]
+    sales["_match_number"] = sales.groupby(match_keys).cumcount()
+    listings["_match_number"] = listings.groupby(match_keys).cumcount()
+
+    matched = sales.merge(
+        listings[match_keys + ["_match_number", "Listing_Date"]],
+        on=match_keys + ["_match_number"],
+        how="inner",
+    )
+    matched["days_to_sale"] = (matched["sale_date"] - matched["Listing_Date"]).dt.days
+    matched = matched[matched["days_to_sale"] >= 0].copy()
+    return matched.drop(columns=["_match_title", "_match_auction_date", "_match_number"], errors="ignore")
+
+
+def weekly_listing_to_sale(records: pd.DataFrame) -> pd.DataFrame:
+    if records.empty:
+        return pd.DataFrame(columns=[
+            "week_start",
+            "week_end",
+            "week_label",
+            "avg_days_to_sale",
+            "items_sold",
+            "avg_days_label",
+        ])
+
+    weekly = records.copy()
+    weekly["week_start"] = weekly["sale_date"].dt.to_period("W-SUN").apply(lambda period: period.start_time)
+    weekly = (
+        weekly.groupby("week_start", as_index=False)
+        .agg(
+            avg_days_to_sale=("days_to_sale", "mean"),
+            items_sold=("days_to_sale", "count"),
+        )
+        .sort_values("week_start")
+    )
+    weekly["week_end"] = weekly["week_start"] + pd.Timedelta(days=6)
+    weekly["week_label"] = weekly.apply(format_week_label, axis=1)
+    weekly["avg_days_label"] = weekly["avg_days_to_sale"].map(lambda value: f"{value:.1f}")
+    return weekly
+
+
+def build_avg_listing_to_sale_figure(weekly_days_to_sale: pd.DataFrame) -> go.Figure:
+    fig = px.bar(
+        weekly_days_to_sale,
+        x="week_label",
+        y="avg_days_to_sale",
+        text="avg_days_label",
+        title="Average Days from Listing to Sale by Sale Week",
+        hover_data={
+            "week_label": True,
+            "avg_days_to_sale": ":.1f",
+            "items_sold": True,
+        },
+    )
+    fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_layout(
+        xaxis_title="Sale week",
+        yaxis_title="Average days",
+        xaxis_tickangle=-45,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    return fig
+
+
+def build_listing_to_sale_distribution(records: pd.DataFrame) -> go.Figure:
+    fig = px.histogram(
+        records,
+        x="days_to_sale",
+        nbins=max(5, min(20, int(records["days_to_sale"].max()) + 1)),
+        title="Distribution of Days from Listing to Sale",
+        hover_data=["Title", "sale_date", "Listing_Date"],
+    )
+    fig.update_layout(
+        xaxis_title="Days from listing to sale",
+        yaxis_title="Items sold",
+        bargap=0.05,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    return fig
+
+
 def summarize_by_auction(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.DataFrame:
     revenue_per_auction = (
         df.dropna(subset=["Auction_Date"])
@@ -149,7 +281,7 @@ def format_week_label(row: pd.Series) -> str:
     end = row["week_end"]
     start_label = f"{start:%b} {start.day}"
     end_label = f"{end:%b} {end.day}"
-    return f"{start_label}–{end_label}"
+    return f"{start_label}-{end_label}"
 
 
 def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
@@ -416,6 +548,18 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 auction_summary = summarize_by_auction(filtered, df_auction_cost)
 weekly = weekly_sales(filtered)
 
+listings_load_error = None
+try:
+    df_listings = import_listings_data()
+except Exception as e:
+    listings_load_error = e
+    df_listings = pd.DataFrame()
+
+listing_sale_records = listing_to_sale_records(filtered, df_listings)
+avg_listing_to_sale_days = (
+    listing_sale_records["days_to_sale"].mean() if not listing_sale_records.empty else np.nan
+)
+
 sold_items = filtered[filtered["sale_date"].notna()].copy()
 total_revenue = sold_items["revenue"].sum()
 total_cost = auction_summary["auction_cost"].sum()
@@ -424,12 +568,16 @@ items_sold = sold_items["revenue"].count()
 avg_sale_price = sold_items["revenue"].mean() if items_sold else 0
 profit_to_cost = total_profit / total_cost if total_cost else np.nan
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Revenue", f"${total_revenue:,.0f}")
 c2.metric("Auction Cost", f"${total_cost:,.0f}")
 c3.metric("Profit", f"${total_profit:,.0f}")
 c4.metric("Items Sold", f"{items_sold:,.0f}")
 c5.metric("Profit / Cost", "N/A" if np.isnan(profit_to_cost) else f"{profit_to_cost:.1%}")
+c6.metric(
+    "Avg List to Sale",
+    "N/A" if np.isnan(avg_listing_to_sale_days) else f"{avg_listing_to_sale_days:.1f} days",
+)
 
 st.divider()
 
@@ -486,14 +634,11 @@ with tab_listings:
     st.subheader("Listings per day")
     plot_start_date = pd.to_datetime("2026-04-30")
 
-    try:
-        df_listings = import_listings_data()
-    except Exception as e:
+    if listings_load_error is not None:
         st.error("Could not load the Listings Google Sheet tab. Make sure the sheet is shared/public or accessible as CSV.")
-        st.exception(e)
-        df_listings = pd.DataFrame()
+        st.exception(listings_load_error)
 
-    if not df_listings.empty:
+    elif not df_listings.empty:
         daily_listings = daily_listing_counts(df_listings, plot_start_date)
         if not daily_listings.empty:
             st.plotly_chart(build_daily_listings_figure(daily_listings), use_container_width=True)
@@ -502,6 +647,34 @@ with tab_listings:
             st.info(f"No listings found on or after {plot_start_date:%Y-%m-%d}.")
     else:
         st.info("Listings data is empty, so there is nothing to chart.")
+
+    st.subheader("Listing to sale timing")
+    if not listing_sale_records.empty:
+        weekly_days_to_sale = weekly_listing_to_sale(listing_sale_records)
+        timing_metric_cols = st.columns(3)
+        timing_metric_cols[0].metric("Matched Sold Items", f"{len(listing_sale_records):,.0f}")
+        timing_metric_cols[1].metric("Average Days", f"{avg_listing_to_sale_days:.1f}")
+        timing_metric_cols[2].metric("Median Days", f"{listing_sale_records['days_to_sale'].median():.1f}")
+        if not weekly_days_to_sale.empty:
+            st.plotly_chart(build_avg_listing_to_sale_figure(weekly_days_to_sale), use_container_width=True)
+        st.plotly_chart(build_listing_to_sale_distribution(listing_sale_records), use_container_width=True)
+        display_listing_sale_records = listing_sale_records[
+            [
+                column
+                for column in [
+                    "sale_date",
+                    "Listing_Date",
+                    "Title",
+                    "product_category",
+                    "revenue",
+                    "days_to_sale",
+                ]
+                if column in listing_sale_records.columns
+            ]
+        ].sort_values("sale_date", ascending=False)
+        st.dataframe(display_listing_sale_records, use_container_width=True)
+    else:
+        st.info("No sold listings with both a listing date and sale date were found for this sale date range.")
 
 with tab_categories:
     st.subheader("Category performance")
