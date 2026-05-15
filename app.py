@@ -20,19 +20,12 @@ HEADER_IMAGE_PATHS = (
 )
 
 SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
-GID = "900908138"
+SALES_GID = "900908138"
 LISTINGS_GID = "944629416"
-CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={GID}"
+AUCTIONS_GID = "1075555494"
+CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={SALES_GID}"
 LISTINGS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={LISTINGS_GID}"
-
-AUCTION_COSTS = {
-    "Auction_Date": [
-        "8/19/2025", "8/26/2025", "9/11/2025", "9/18/2025", "9/25/2025", "10/2/2025",
-        "10/17/2025", "10/23/2025", "12/11/2025", "12/23/2025", "1/8/2026", "1/22/2026",
-        "1/29/2026", "2/2/2026", "2/12/2026", "3/5/2026", "3/19/2026", "4/30/2026"
-    ],
-    "auction_cost": [1800, 2000, 3386, 900, 650, 3367, 2811, 544.64, 2600, 1669, 3443, 1141, 849, 0, 1420, 761, 2647, 820],
-}
+AUCTIONS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={AUCTIONS_GID}"
 
 
 def money_to_number(series: pd.Series) -> pd.Series:
@@ -44,15 +37,26 @@ def money_to_number(series: pd.Series) -> pd.Series:
 
 @st.cache_data(ttl=3600)
 def import_auction_data() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Loads Marketplace sales data from Google Sheets and merges in fixed auction costs."""
+    """Loads Marketplace sales and auction costs from Google Sheets."""
     df_google_sheet = pd.read_csv(CSV_URL)
-    df_auction_cost = pd.DataFrame(AUCTION_COSTS)
+    df_auction_cost = pd.read_csv(AUCTIONS_CSV_URL)
+
+    required_auction_columns = {"Auction_Date", "Spent"}
+    missing_auction_columns = required_auction_columns - set(df_auction_cost.columns)
+    if missing_auction_columns:
+        missing = ", ".join(sorted(missing_auction_columns))
+        raise ValueError(f"Auctions sheet is missing required column(s): {missing}")
 
     df_google_sheet["Auction_Date"] = pd.to_datetime(df_google_sheet["Auction_Date"], format="%m/%d/%Y", errors="coerce")
     df_google_sheet["sale_date"] = pd.to_datetime(df_google_sheet["sale_date"], format="%m/%d/%Y", errors="coerce")
     df_google_sheet["revenue"] = money_to_number(df_google_sheet["revenue"])
 
     df_auction_cost["Auction_Date"] = pd.to_datetime(df_auction_cost["Auction_Date"], format="%m/%d/%Y", errors="coerce")
+    df_auction_cost["auction_cost"] = money_to_number(df_auction_cost["Spent"])
+    df_auction_cost = (
+        df_auction_cost.dropna(subset=["Auction_Date"])[["Auction_Date", "auction_cost"]]
+        .copy()
+    )
 
     merged_df = pd.merge(df_google_sheet, df_auction_cost, on="Auction_Date", how="left")
     return merged_df, df_auction_cost
