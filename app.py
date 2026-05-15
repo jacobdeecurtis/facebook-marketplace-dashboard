@@ -36,13 +36,13 @@ def money_to_number(series: pd.Series) -> pd.Series:
 
 
 @st.cache_data(ttl=3600)
-def import_auction_data() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Loads Marketplace sales and auction costs from Google Sheets."""
+def import_auction_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Loads Marketplace sales, auction costs, and other reselling costs from Google Sheets."""
     df_google_sheet = pd.read_csv(CSV_URL)
-    df_auction_cost = pd.read_csv(AUCTIONS_CSV_URL)
+    df_costs = pd.read_csv(AUCTIONS_CSV_URL)
 
     required_auction_columns = {"Auction_Date", "Spent"}
-    missing_auction_columns = required_auction_columns - set(df_auction_cost.columns)
+    missing_auction_columns = required_auction_columns - set(df_costs.columns)
     if missing_auction_columns:
         missing = ", ".join(sorted(missing_auction_columns))
         raise ValueError(f"Auctions sheet is missing required column(s): {missing}")
@@ -51,15 +51,18 @@ def import_auction_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     df_google_sheet["sale_date"] = pd.to_datetime(df_google_sheet["sale_date"], format="%m/%d/%Y", errors="coerce")
     df_google_sheet["revenue"] = money_to_number(df_google_sheet["revenue"])
 
-    df_auction_cost["Auction_Date"] = pd.to_datetime(df_auction_cost["Auction_Date"], format="%m/%d/%Y", errors="coerce")
-    df_auction_cost["auction_cost"] = money_to_number(df_auction_cost["Spent"])
-    df_auction_cost = (
-        df_auction_cost.dropna(subset=["Auction_Date"])[["Auction_Date", "auction_cost"]]
+    df_costs["Auction_Date"] = pd.to_datetime(df_costs["Auction_Date"], format="%m/%d/%Y", errors="coerce")
+    df_costs["auction_cost"] = money_to_number(df_costs["Spent"])
+    df_costs = (
+        df_costs.dropna(subset=["Auction_Date"])[["Auction_Number", "Auction_Date", "auction_cost"]]
         .copy()
     )
+    df_costs["Auction_Number"] = df_costs["Auction_Number"].astype(str).str.strip()
+    df_auction_cost = df_costs[df_costs["Auction_Number"].ne("") & df_costs["Auction_Number"].ne("nan")].copy()
+    df_other_cost = df_costs[df_costs["Auction_Number"].eq("") | df_costs["Auction_Number"].eq("nan")].copy()
 
     merged_df = pd.merge(df_google_sheet, df_auction_cost, on="Auction_Date", how="left")
-    return merged_df, df_auction_cost
+    return merged_df, df_auction_cost, df_other_cost
 
 
 @st.cache_data(ttl=3600)
@@ -308,7 +311,7 @@ def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
     return weekly
 
 
-def daily_profit(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.DataFrame:
+def daily_profit(df: pd.DataFrame, df_costs: pd.DataFrame) -> pd.DataFrame:
     sales = (
         df.dropna(subset=["sale_date"])
         .groupby("sale_date", as_index=False)["revenue"]
@@ -316,7 +319,7 @@ def daily_profit(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.DataFram
         .rename(columns={"sale_date": "date", "revenue": "daily_revenue"})
     )
     costs = (
-        df_auction_cost.dropna(subset=["Auction_Date"])
+        df_costs.dropna(subset=["Auction_Date"])
         .groupby("Auction_Date", as_index=False)["auction_cost"]
         .sum()
         .rename(columns={"Auction_Date": "date", "auction_cost": "daily_auction_cost"})
@@ -529,7 +532,7 @@ with st.sidebar:
         st.cache_data.clear()
 
 try:
-    df, df_auction_cost = import_auction_data()
+    df, df_auction_cost, df_other_cost = import_auction_data()
 except Exception as e:
     st.error("Could not load the Google Sheet. Make sure the sheet is shared/public or accessible as CSV.")
     st.exception(e)
@@ -551,6 +554,7 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 
 auction_summary = summarize_by_auction(filtered, df_auction_cost)
 weekly = weekly_sales(filtered)
+df_total_cost = pd.concat([df_auction_cost, df_other_cost], ignore_index=True)
 
 listings_load_error = None
 try:
@@ -566,7 +570,7 @@ avg_listing_to_sale_days = (
 
 sold_items = filtered[filtered["sale_date"].notna()].copy()
 total_revenue = sold_items["revenue"].sum()
-total_cost = auction_summary["auction_cost"].sum()
+total_cost = df_total_cost["auction_cost"].sum()
 total_profit = total_revenue - total_cost
 items_sold = sold_items["revenue"].count()
 avg_sale_price = sold_items["revenue"].mean() if items_sold else 0
@@ -574,7 +578,7 @@ profit_to_cost = total_profit / total_cost if total_cost else np.nan
 
 c1, c2, c3, c4, c5, c6 = st.columns(6)
 c1.metric("Revenue", f"${total_revenue:,.0f}")
-c2.metric("Auction Cost", f"${total_cost:,.0f}")
+c2.metric("Total Cost", f"${total_cost:,.0f}")
 c3.metric("Profit", f"${total_profit:,.0f}")
 c4.metric("Items Sold", f"{items_sold:,.0f}")
 c5.metric("Profit / Cost", "N/A" if np.isnan(profit_to_cost) else f"{profit_to_cost:.1%}")
@@ -608,7 +612,7 @@ with tab_overview:
         st.info("No sales found for this date range.")
 
     st.subheader("Daily cumulative profit")
-    profit_daily = daily_profit(filtered, df_auction_cost)
+    profit_daily = daily_profit(filtered, df_total_cost)
     if not profit_daily.empty:
         st.plotly_chart(build_cumulative_profit_projection(profit_daily), use_container_width=True)
     else:
