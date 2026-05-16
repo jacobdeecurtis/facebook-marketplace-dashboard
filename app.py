@@ -26,6 +26,7 @@ AUCTIONS_GID = "1075555494"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={SALES_GID}"
 LISTINGS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={LISTINGS_GID}"
 AUCTIONS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={AUCTIONS_GID}"
+AUCTION_TAB_EXCLUDED_DATES = pd.to_datetime(["2026-05-14"])
 
 
 def money_to_number(series: pd.Series) -> pd.Series:
@@ -285,6 +286,16 @@ def summarize_by_auction(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.
     cumulative_profit = summary["profit"].cumsum()
     summary["cumulative_profit_to_cost"] = np.where(cumulative_cost > 0, cumulative_profit / cumulative_cost, np.nan)
     return summary
+
+
+def filter_auction_tab_summary(summary: pd.DataFrame) -> pd.DataFrame:
+    """Hides non-auction cost dates from the auction performance tab only."""
+    if summary.empty:
+        return summary
+
+    excluded_dates = AUCTION_TAB_EXCLUDED_DATES.normalize()
+    auction_dates = summary["Auction_Date"].dt.normalize()
+    return summary[~auction_dates.isin(excluded_dates)].copy()
 
 
 def format_week_label(row: pd.Series) -> str:
@@ -557,6 +568,7 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
     filtered = filtered[(filtered["sale_date"].isna()) | ((filtered["sale_date"] >= start) & (filtered["sale_date"] <= end))]
 
 auction_summary = summarize_by_auction(filtered, df_auction_cost)
+auction_tab_summary = filter_auction_tab_summary(auction_summary)
 weekly = weekly_sales(filtered)
 df_total_cost = pd.concat([df_auction_cost, df_other_cost], ignore_index=True)
 
@@ -625,13 +637,13 @@ with tab_overview:
 with tab_auctions:
     st.subheader("Auction performance")
     fig = go.Figure()
-    fig.add_bar(x=auction_summary["Auction_Date"], y=auction_summary["total_revenue"], name="Revenue")
-    fig.add_bar(x=auction_summary["Auction_Date"], y=auction_summary["auction_cost"], name="Cost")
-    fig.add_scatter(x=auction_summary["Auction_Date"], y=auction_summary["profit"], name="Profit", mode="lines+markers")
+    fig.add_bar(x=auction_tab_summary["Auction_Date"], y=auction_tab_summary["total_revenue"], name="Revenue")
+    fig.add_bar(x=auction_tab_summary["Auction_Date"], y=auction_tab_summary["auction_cost"], name="Cost")
+    fig.add_scatter(x=auction_tab_summary["Auction_Date"], y=auction_tab_summary["profit"], name="Profit", mode="lines+markers")
     fig.update_layout(barmode="group", xaxis_title="Auction Date", yaxis_title="Dollars")
     st.plotly_chart(fig, use_container_width=True)
 
-    display_summary = auction_summary.copy()
+    display_summary = auction_tab_summary.copy()
     st.dataframe(
         display_summary.style.format({
             "total_revenue": "${:,.0f}",
