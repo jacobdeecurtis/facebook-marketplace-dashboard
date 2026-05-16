@@ -139,6 +139,43 @@ def build_daily_listings_figure(daily_listings: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def auction_to_listing_records(df_listings: pd.DataFrame) -> pd.DataFrame:
+    """Returns listings with a valid, non-negative age from auction date to listing date."""
+    required_columns = {"Auction_Date", "Listing_Date"}
+    if df_listings.empty or not required_columns.issubset(df_listings.columns):
+        return pd.DataFrame(columns=["Auction_Date", "Listing_Date", "days_from_auction_to_listing"])
+
+    records = df_listings.dropna(subset=["Auction_Date", "Listing_Date"]).copy()
+    if records.empty:
+        return pd.DataFrame(columns=["Auction_Date", "Listing_Date", "days_from_auction_to_listing"])
+
+    records["Auction_Date"] = records["Auction_Date"].dt.normalize()
+    records["Listing_Date"] = records["Listing_Date"].dt.normalize()
+    records["days_from_auction_to_listing"] = (
+        records["Listing_Date"] - records["Auction_Date"]
+    ).dt.days
+    return records[records["days_from_auction_to_listing"] >= 0].copy()
+
+
+def build_auction_to_listing_distribution(records: pd.DataFrame) -> go.Figure:
+    max_days = int(records["days_from_auction_to_listing"].max())
+    fig = px.histogram(
+        records,
+        x="days_from_auction_to_listing",
+        nbins=max(5, min(20, max_days + 1)),
+        title="Distribution of Days from Auction to Listing",
+        hover_data=[column for column in ["Title", "Auction_Date", "Listing_Date"] if column in records.columns],
+    )
+    fig.update_layout(
+        xaxis_title="Days from auction to listing",
+        yaxis_title="Listings",
+        bargap=0.05,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    return fig
+
+
 def normalize_match_text(series: pd.Series) -> pd.Series:
     return (
         series.fillna("")
@@ -583,6 +620,7 @@ listing_sale_records = listing_to_sale_records(filtered, df_listings)
 avg_listing_to_sale_days = (
     listing_sale_records["days_to_sale"].mean() if not listing_sale_records.empty else np.nan
 )
+auction_listing_records = auction_to_listing_records(df_listings)
 
 sold_items = filtered[filtered["sale_date"].notna()].copy()
 total_revenue = sold_items["revenue"].sum()
@@ -672,6 +710,32 @@ with tab_listings:
             st.info(f"No listings found on or after {plot_start_date:%Y-%m-%d}.")
     else:
         st.info("Listings data is empty, so there is nothing to chart.")
+
+    st.subheader("Auction to listing timing")
+    if not auction_listing_records.empty:
+        auction_listing_days = auction_listing_records["days_from_auction_to_listing"]
+        auction_listing_metric_cols = st.columns(4)
+        auction_listing_metric_cols[0].metric("Matched Listings", f"{len(auction_listing_records):,.0f}")
+        auction_listing_metric_cols[1].metric("Mean Days", f"{auction_listing_days.mean():.1f}")
+        auction_listing_metric_cols[2].metric("Median Days", f"{auction_listing_days.median():.1f}")
+        auction_listing_metric_cols[3].metric("Max Days", f"{auction_listing_days.max():.0f}")
+        st.plotly_chart(build_auction_to_listing_distribution(auction_listing_records), use_container_width=True)
+        display_auction_listing_records = auction_listing_records[
+            [
+                column
+                for column in [
+                    "Auction_Date",
+                    "Listing_Date",
+                    "Title",
+                    "product_category",
+                    "days_from_auction_to_listing",
+                ]
+                if column in auction_listing_records.columns
+            ]
+        ].sort_values("Listing_Date", ascending=False)
+        st.dataframe(display_auction_listing_records, use_container_width=True)
+    else:
+        st.info("No listings with both an auction date and listing date were found.")
 
     st.subheader("Listing to sale timing")
     if not listing_sale_records.empty:
