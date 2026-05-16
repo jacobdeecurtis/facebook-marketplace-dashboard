@@ -280,7 +280,11 @@ def summarize_by_auction(df: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.
     summary["auction_cost"] = summary["auction_cost"].fillna(0)
     summary["profit"] = summary["total_revenue"] - summary["auction_cost"]
     summary["profit_to_cost"] = np.where(summary["auction_cost"] > 0, summary["profit"] / summary["auction_cost"], np.nan)
-    return summary.sort_values("Auction_Date")
+    summary = summary.sort_values("Auction_Date")
+    cumulative_cost = summary["auction_cost"].cumsum()
+    cumulative_profit = summary["profit"].cumsum()
+    summary["cumulative_profit_to_cost"] = np.where(cumulative_cost > 0, cumulative_profit / cumulative_cost, np.nan)
+    return summary
 
 
 def format_week_label(row: pd.Series) -> str:
@@ -634,6 +638,7 @@ with tab_auctions:
             "auction_cost": "${:,.0f}",
             "profit": "${:,.0f}",
             "profit_to_cost": "{:.1%}",
+            "cumulative_profit_to_cost": "{:.1%}",
         }),
         use_container_width=True,
     )
