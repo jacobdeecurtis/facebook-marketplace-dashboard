@@ -198,32 +198,6 @@ def build_auction_to_listing_distribution(records: pd.DataFrame) -> go.Figure:
     return fig
 
 
-def daily_auction_to_listing_summary(records: pd.DataFrame) -> pd.DataFrame:
-    """Returns auction-to-listing timing by listing date."""
-    if records.empty:
-        return pd.DataFrame(columns=[
-            "Listing_Date",
-            "listings",
-            "avg_days_from_auction_to_listing",
-            "median_days_from_auction_to_listing",
-            "min_days_from_auction_to_listing",
-            "max_days_from_auction_to_listing",
-        ])
-
-    summary = (
-        records.groupby("Listing_Date", as_index=False)
-        .agg(
-            listings=("days_from_auction_to_listing", "count"),
-            avg_days_from_auction_to_listing=("days_from_auction_to_listing", "mean"),
-            median_days_from_auction_to_listing=("days_from_auction_to_listing", "median"),
-            min_days_from_auction_to_listing=("days_from_auction_to_listing", "min"),
-            max_days_from_auction_to_listing=("days_from_auction_to_listing", "max"),
-        )
-        .sort_values("Listing_Date", ascending=False)
-    )
-    return summary
-
-
 def normalize_match_text(series: pd.Series) -> pd.Series:
     return (
         series.fillna("")
@@ -753,7 +727,6 @@ with tab_listings:
         daily_listings = daily_listing_counts(df_listings, plot_start_date)
         if not daily_listings.empty:
             st.plotly_chart(build_daily_listings_figure(daily_listings), use_container_width=True)
-            st.dataframe(daily_listings, use_container_width=True)
         else:
             st.info(f"No listings found on or after {plot_start_date:%Y-%m-%d}.")
     else:
@@ -768,34 +741,6 @@ with tab_listings:
         auction_listing_metric_cols[2].metric("Median Days", f"{auction_listing_days.median():.1f}")
         auction_listing_metric_cols[3].metric("Max Days", f"{auction_listing_days.max():.0f}")
         st.plotly_chart(build_auction_to_listing_distribution(auction_listing_records), use_container_width=True)
-
-        st.write("Daily auction-to-listing timing")
-        daily_auction_listing = daily_auction_to_listing_summary(auction_listing_records)
-        st.dataframe(
-            daily_auction_listing.style.format({
-                "avg_days_from_auction_to_listing": "{:.1f}",
-                "median_days_from_auction_to_listing": "{:.1f}",
-                "min_days_from_auction_to_listing": "{:.0f}",
-                "max_days_from_auction_to_listing": "{:.0f}",
-            }),
-            use_container_width=True,
-        )
-
-        st.write("Listing detail")
-        display_auction_listing_records = auction_listing_records[
-            [
-                column
-                for column in [
-                    "Listing_Date",
-                    "Auction_Date",
-                    "Title",
-                    "product_category",
-                    "days_from_auction_to_listing",
-                ]
-                if column in auction_listing_records.columns
-            ]
-        ].sort_values(["Listing_Date", "days_from_auction_to_listing"], ascending=[False, False])
-        st.dataframe(display_auction_listing_records, use_container_width=True)
     else:
         st.info("No listings with both an auction date and listing date were found.")
 
@@ -809,21 +754,6 @@ with tab_listings:
         if not weekly_days_to_sale.empty:
             st.plotly_chart(build_avg_listing_to_sale_figure(weekly_days_to_sale), use_container_width=True)
         st.plotly_chart(build_listing_to_sale_distribution(listing_sale_records), use_container_width=True)
-        display_listing_sale_records = listing_sale_records[
-            [
-                column
-                for column in [
-                    "sale_date",
-                    "Listing_Date",
-                    "Title",
-                    "product_category",
-                    "revenue",
-                    "days_to_sale",
-                ]
-                if column in listing_sale_records.columns
-            ]
-        ].sort_values("sale_date", ascending=False)
-        st.dataframe(display_listing_sale_records, use_container_width=True)
     else:
         st.info("No sold listings with both a listing date and sale date were found for this sale date range.")
 
