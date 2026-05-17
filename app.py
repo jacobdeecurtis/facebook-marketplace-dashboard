@@ -2,6 +2,7 @@ import base64
 import mimetypes
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import numpy as np
@@ -385,6 +386,49 @@ def weekly_sales(df: pd.DataFrame) -> pd.DataFrame:
     return weekly
 
 
+def daily_sales_performance(df: pd.DataFrame) -> dict:
+    """Summarizes today's sales and rank among revenue-generating days."""
+    sales = df.dropna(subset=["sale_date"]).copy()
+    today = datetime.now(ZoneInfo("America/Denver")).date()
+
+    empty_result = {
+        "today": today,
+        "sales_today": pd.DataFrame(),
+        "total_revenue_today": 0,
+        "items_sold_today": 0,
+        "rank": None,
+        "total_sales_days": 0,
+        "percentile_rank": None,
+    }
+    if sales.empty:
+        return empty_result
+
+    sales["sale_date_only"] = sales["sale_date"].dt.date
+    sales_today = sales[sales["sale_date_only"] == today].copy()
+    total_revenue_today = sales_today["revenue"].sum()
+
+    daily_revenue = (
+        sales.groupby("sale_date_only", as_index=False)["revenue"]
+        .sum()
+        .sort_values("revenue", ascending=False)
+        .reset_index(drop=True)
+    )
+    today_rank_row = daily_revenue[daily_revenue["sale_date_only"] == today]
+    rank = int(today_rank_row.index[0] + 1) if not today_rank_row.empty else None
+    total_sales_days = len(daily_revenue)
+    percentile_rank = (rank / total_sales_days) * 100 if rank and total_sales_days else None
+
+    return {
+        "today": today,
+        "sales_today": sales_today,
+        "total_revenue_today": total_revenue_today,
+        "items_sold_today": sales_today["revenue"].count(),
+        "rank": rank,
+        "total_sales_days": total_sales_days,
+        "percentile_rank": percentile_rank,
+    }
+
+
 def daily_profit(df: pd.DataFrame, df_costs: pd.DataFrame) -> pd.DataFrame:
     sales = (
         df.dropna(subset=["sale_date"])
@@ -670,6 +714,38 @@ tab_overview, tab_auctions, tab_listings, tab_categories, tab_recent, tab_raw = 
 ])
 
 with tab_overview:
+    today_sales = daily_sales_performance(df)
+    st.subheader(f"Today's sales ({today_sales['today']:%Y-%m-%d})")
+    if today_sales["total_revenue_today"] > 0:
+        today_cols = st.columns(3)
+        today_cols[0].metric("Today's Revenue", f"${today_sales['total_revenue_today']:,.0f}")
+        today_cols[1].metric("Items Sold Today", f"{today_sales['items_sold_today']:,.0f}")
+        if today_sales["rank"] is not None:
+            today_cols[2].metric(
+                "Daily Rank",
+                f"#{today_sales['rank']} of {today_sales['total_sales_days']}",
+                f"Top {today_sales['percentile_rank']:.0f}%",
+            )
+            st.caption(
+                f"Today is the {today_sales['rank']} highest selling day, "
+                f"ranking in the top {today_sales['percentile_rank']:.0f}% of sales days."
+            )
+        else:
+            today_cols[2].metric("Daily Rank", "N/A")
+
+        today_item_cols = [
+            column for column in ["sale_date", "Title", "product", "product_category", "revenue", "Auction_Date"]
+            if column in today_sales["sales_today"].columns
+        ]
+        st.dataframe(
+            today_sales["sales_today"].sort_values("revenue", ascending=False)[today_item_cols].style.format({
+                "revenue": "${:,.2f}",
+            }),
+            use_container_width=True,
+        )
+    else:
+        st.info("No sales recorded for today.")
+
     st.subheader("Sales over time")
     if not weekly.empty:
         fig_weekly = px.bar(
