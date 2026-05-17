@@ -590,6 +590,14 @@ def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
         yaxis_title="Cumulative Net Profit",
         hovermode="x unified",
         yaxis=dict(tickformat="$,.0f"),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.25,
+            xanchor="center",
+            x=0.5,
+        ),
+        margin=dict(b=100),
         plot_bgcolor="white",
         paper_bgcolor="white",
     )
