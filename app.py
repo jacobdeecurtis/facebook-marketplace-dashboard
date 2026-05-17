@@ -159,6 +159,10 @@ def auction_to_listing_records(df_listings: pd.DataFrame) -> pd.DataFrame:
 
 def build_auction_to_listing_distribution(records: pd.DataFrame) -> go.Figure:
     max_days = int(records["days_from_auction_to_listing"].max())
+    timing_days = records["days_from_auction_to_listing"]
+    mean_days = timing_days.mean()
+    median_days = timing_days.median()
+    std_days = timing_days.std(ddof=0)
     fig = px.histogram(
         records,
         x="days_from_auction_to_listing",
@@ -173,7 +177,51 @@ def build_auction_to_listing_distribution(records: pd.DataFrame) -> go.Figure:
         plot_bgcolor="white",
         paper_bgcolor="white",
     )
+    line_specs = [
+        ("Mean", mean_days, "#EF553B", "dash"),
+        ("Median", median_days, "#00CC96", "dot"),
+    ]
+    if pd.notna(std_days):
+        line_specs.extend([
+            ("Mean - 1 SD", max(0, mean_days - std_days), "#AB63FA", "dashdot"),
+            ("Mean + 1 SD", mean_days + std_days, "#AB63FA", "dashdot"),
+        ])
+    for label, value, color, dash in line_specs:
+        fig.add_vline(
+            x=value,
+            line_width=2,
+            line_dash=dash,
+            line_color=color,
+            annotation_text=f"{label}: {value:.1f}",
+            annotation_position="top right",
+        )
     return fig
+
+
+def daily_auction_to_listing_summary(records: pd.DataFrame) -> pd.DataFrame:
+    """Returns auction-to-listing timing by listing date."""
+    if records.empty:
+        return pd.DataFrame(columns=[
+            "Listing_Date",
+            "listings",
+            "avg_days_from_auction_to_listing",
+            "median_days_from_auction_to_listing",
+            "min_days_from_auction_to_listing",
+            "max_days_from_auction_to_listing",
+        ])
+
+    summary = (
+        records.groupby("Listing_Date", as_index=False)
+        .agg(
+            listings=("days_from_auction_to_listing", "count"),
+            avg_days_from_auction_to_listing=("days_from_auction_to_listing", "mean"),
+            median_days_from_auction_to_listing=("days_from_auction_to_listing", "median"),
+            min_days_from_auction_to_listing=("days_from_auction_to_listing", "min"),
+            max_days_from_auction_to_listing=("days_from_auction_to_listing", "max"),
+        )
+        .sort_values("Listing_Date", ascending=False)
+    )
+    return summary
 
 
 def normalize_match_text(series: pd.Series) -> pd.Series:
@@ -720,19 +768,33 @@ with tab_listings:
         auction_listing_metric_cols[2].metric("Median Days", f"{auction_listing_days.median():.1f}")
         auction_listing_metric_cols[3].metric("Max Days", f"{auction_listing_days.max():.0f}")
         st.plotly_chart(build_auction_to_listing_distribution(auction_listing_records), use_container_width=True)
+
+        st.write("Daily auction-to-listing timing")
+        daily_auction_listing = daily_auction_to_listing_summary(auction_listing_records)
+        st.dataframe(
+            daily_auction_listing.style.format({
+                "avg_days_from_auction_to_listing": "{:.1f}",
+                "median_days_from_auction_to_listing": "{:.1f}",
+                "min_days_from_auction_to_listing": "{:.0f}",
+                "max_days_from_auction_to_listing": "{:.0f}",
+            }),
+            use_container_width=True,
+        )
+
+        st.write("Listing detail")
         display_auction_listing_records = auction_listing_records[
             [
                 column
                 for column in [
-                    "Auction_Date",
                     "Listing_Date",
+                    "Auction_Date",
                     "Title",
                     "product_category",
                     "days_from_auction_to_listing",
                 ]
                 if column in auction_listing_records.columns
             ]
-        ].sort_values("Listing_Date", ascending=False)
+        ].sort_values(["Listing_Date", "days_from_auction_to_listing"], ascending=[False, False])
         st.dataframe(display_auction_listing_records, use_container_width=True)
     else:
         st.info("No listings with both an auction date and listing date were found.")
