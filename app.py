@@ -28,6 +28,7 @@ CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:cs
 LISTINGS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={LISTINGS_GID}"
 AUCTIONS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={AUCTIONS_GID}"
 AUCTION_TAB_EXCLUDED_DATES = pd.to_datetime(["2026-05-14"])
+CUMULATIVE_PROFIT_EXCLUDED_DATES = pd.to_datetime(["2025-01-01", "2026-01-01"])
 
 
 def money_to_number(series: pd.Series) -> pd.Series:
@@ -356,6 +357,156 @@ def filter_auction_tab_summary(summary: pd.DataFrame) -> pd.DataFrame:
     excluded_dates = AUCTION_TAB_EXCLUDED_DATES.normalize()
     auction_dates = summary["Auction_Date"].dt.normalize()
     return summary[~auction_dates.isin(excluded_dates)].copy()
+
+
+def prepare_cumulative_profit_data(df_sales: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.DataFrame:
+    """Returns day-by-day cumulative profit for each auction through the latest sale date."""
+    required_sales_columns = {"Auction_Date", "sale_date", "revenue"}
+    required_cost_columns = {"Auction_Date", "auction_cost"}
+    if (
+        df_sales.empty
+        or df_auction_cost.empty
+        or not required_sales_columns.issubset(df_sales.columns)
+        or not required_cost_columns.issubset(df_auction_cost.columns)
+    ):
+        return pd.DataFrame(columns=[
+            "Auction_Date",
+            "sale_date",
+            "daily_revenue_sum",
+            "cumulative_revenue",
+            "cumulative_profit",
+            "time_since_auction",
+            "auction_cost",
+        ])
+
+    sales = df_sales.copy()
+    sales["Auction_Date"] = pd.to_datetime(sales["Auction_Date"], errors="coerce").dt.normalize()
+    sales["sale_date"] = pd.to_datetime(sales["sale_date"], errors="coerce").dt.normalize()
+    sales["revenue"] = pd.to_numeric(sales["revenue"], errors="coerce")
+    sales = sales.dropna(subset=["Auction_Date", "sale_date", "revenue"]).copy()
+    if sales.empty:
+        return pd.DataFrame(columns=[
+            "Auction_Date",
+            "sale_date",
+            "daily_revenue_sum",
+            "cumulative_revenue",
+            "cumulative_profit",
+            "time_since_auction",
+            "auction_cost",
+        ])
+
+    auction_costs = df_auction_cost.copy()
+    auction_costs["Auction_Date"] = pd.to_datetime(auction_costs["Auction_Date"], errors="coerce").dt.normalize()
+    auction_costs["auction_cost"] = pd.to_numeric(auction_costs["auction_cost"], errors="coerce").fillna(0)
+    auction_costs = (
+        auction_costs.dropna(subset=["Auction_Date"])
+        .groupby("Auction_Date", as_index=False)["auction_cost"]
+        .sum()
+    )
+
+    latest_sale_date = sales["sale_date"].max()
+    cumulative_rows = []
+    for auction_date in sorted(sales["Auction_Date"].dropna().unique()):
+        auction_sales = sales[sales["Auction_Date"] == auction_date].copy()
+        daily_revenue = auction_sales.groupby("sale_date", as_index=False)["revenue"].sum()
+        if latest_sale_date < auction_date:
+            continue
+
+        full_dates = pd.DataFrame({"sale_date": pd.date_range(start=auction_date, end=latest_sale_date, freq="D")})
+        full_dates["Auction_Date"] = auction_date
+        auction_cost_row = auction_costs[auction_costs["Auction_Date"] == auction_date]
+        auction_cost = 0 if auction_cost_row.empty else auction_cost_row["auction_cost"].iloc[0]
+
+        auction_daily = full_dates.merge(daily_revenue, on="sale_date", how="left")
+        auction_daily["daily_revenue_sum"] = auction_daily["revenue"].fillna(0)
+        auction_daily["cumulative_revenue"] = auction_daily["daily_revenue_sum"].cumsum()
+        auction_daily["cumulative_profit"] = auction_daily["cumulative_revenue"] - auction_cost
+        auction_daily["time_since_auction"] = (auction_daily["sale_date"] - auction_daily["Auction_Date"]).dt.days
+        auction_daily["auction_cost"] = auction_cost
+        cumulative_rows.append(auction_daily[[
+            "Auction_Date",
+            "sale_date",
+            "daily_revenue_sum",
+            "cumulative_revenue",
+            "cumulative_profit",
+            "time_since_auction",
+            "auction_cost",
+        ]])
+
+    if not cumulative_rows:
+        return pd.DataFrame(columns=[
+            "Auction_Date",
+            "sale_date",
+            "daily_revenue_sum",
+            "cumulative_revenue",
+            "cumulative_profit",
+            "time_since_auction",
+            "auction_cost",
+        ])
+    return pd.concat(cumulative_rows, ignore_index=True)
+
+
+def build_auction_cumulative_profit_figure(df_cumulative_profit: pd.DataFrame) -> go.Figure:
+    fig = go.Figure()
+    sorted_auction_dates = sorted(df_cumulative_profit["Auction_Date"].dropna().unique())
+
+    for index, auction_date in enumerate(sorted_auction_dates, start=1):
+        df_auction = (
+            df_cumulative_profit[df_cumulative_profit["Auction_Date"] == auction_date]
+            .sort_values("time_since_auction")
+        )
+        if df_auction.empty:
+            continue
+
+        final_point = len(df_auction) - 1
+        fig.add_trace(go.Scatter(
+            x=df_auction["time_since_auction"],
+            y=df_auction["cumulative_profit"],
+            mode="lines+text",
+            name=f"({index}) {auction_date.strftime('%Y-%m-%d')}",
+            hovertemplate=(
+                "<b>%{fullData.name}</b><br>"
+                "Days since auction: %{x}<br>"
+                "Cumulative profit: %{y:$,.0f}<extra></extra>"
+            ),
+            text=[
+                f"${value:,.0f}" if point_index == final_point else ""
+                for point_index, value in enumerate(df_auction["cumulative_profit"])
+            ],
+            textposition="top right",
+        ))
+
+    fig.add_shape(
+        type="line",
+        x0=0,
+        y0=0,
+        x1=df_cumulative_profit["time_since_auction"].max(),
+        y1=0,
+        line=dict(color="Red", width=2, dash="dash"),
+    )
+    fig.update_layout(
+        title={
+            "text": "Interactive Cumulative Profit Over Time by Auction",
+            "x": 0.5,
+            "xanchor": "center",
+        },
+        xaxis_title="Days Since Auction",
+        yaxis_title="Cumulative Profit ($)",
+        hovermode="x unified",
+        yaxis=dict(tickformat="$,.0f"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        height=700,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1,
+        ),
+        margin=dict(t=120),
+    )
+    return fig
 
 
 def format_week_label(row: pd.Series) -> str:
@@ -786,6 +937,18 @@ with tab_auctions:
     fig.add_scatter(x=auction_tab_summary["Auction_Date"], y=auction_tab_summary["profit"], name="Profit", mode="lines+markers")
     fig.update_layout(barmode="group", xaxis_title="Auction Date", yaxis_title="Dollars")
     st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Cumulative profit over time by auction")
+    df_cumulative_profit = prepare_cumulative_profit_data(df, df_auction_cost)
+    if not df_cumulative_profit.empty:
+        excluded_dates = CUMULATIVE_PROFIT_EXCLUDED_DATES.normalize()
+        auction_dates = df_cumulative_profit["Auction_Date"].dt.normalize()
+        df_cumulative_profit = df_cumulative_profit[~auction_dates.isin(excluded_dates)].copy()
+
+    if not df_cumulative_profit.empty:
+        st.plotly_chart(build_auction_cumulative_profit_figure(df_cumulative_profit), use_container_width=True)
+    else:
+        st.info("No cumulative auction profit data found.")
 
     display_summary = auction_tab_summary.copy()
     st.dataframe(
