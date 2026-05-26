@@ -24,9 +24,11 @@ SHEET_ID = "1UkYDjeRaJlu3ByJYLeKzBScu7OwY6vxd2BgU-EnT41I"
 SALES_GID = "900908138"
 LISTINGS_GID = "944629416"
 AUCTIONS_GID = "1075555494"
+DONATIONS_GID = "152860955"
 CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={SALES_GID}"
 LISTINGS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={LISTINGS_GID}"
 AUCTIONS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={AUCTIONS_GID}"
+DONATIONS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={DONATIONS_GID}"
 AUCTION_TAB_EXCLUDED_DATES = pd.to_datetime(["2026-05-14"])
 CUMULATIVE_PROFIT_EXCLUDED_DATES = pd.to_datetime(["2025-01-01", "2026-01-01"])
 
@@ -36,6 +38,12 @@ def money_to_number(series: pd.Series) -> pd.Series:
         series.astype(str).str.replace("$", "", regex=False).str.replace(",", "", regex=False),
         errors="coerce",
     )
+
+
+def format_date_for_display(value: object) -> str:
+    if pd.isna(value):
+        return ""
+    return pd.to_datetime(value).strftime("%Y-%m-%d")
 
 
 @st.cache_data(ttl=3600)
@@ -81,6 +89,23 @@ def import_listings_data() -> pd.DataFrame:
     df_listings = df_listings.dropna(subset=["Listing_Date"]).copy()
     df_listings["Listing_Date"] = df_listings["Listing_Date"].dt.normalize()
     return df_listings
+
+
+@st.cache_data(ttl=3600)
+def import_donations_data() -> pd.DataFrame:
+    """Loads tax-deductible donation records from the Donations Google Sheet tab."""
+    df_donations = pd.read_csv(DONATIONS_CSV_URL)
+    required_columns = {"Donated", "Value"}
+    missing_columns = required_columns - set(df_donations.columns)
+    if missing_columns:
+        missing = ", ".join(sorted(missing_columns))
+        raise ValueError(f"Donations sheet is missing required column(s): {missing}")
+
+    df_donations["Donated"] = pd.to_datetime(df_donations["Donated"], errors="coerce")
+    df_donations["Value"] = money_to_number(df_donations["Value"])
+    if "Received date" in df_donations.columns:
+        df_donations["Received date"] = pd.to_datetime(df_donations["Received date"], errors="coerce")
+    return df_donations
 
 
 def daily_listing_counts(df_listings: pd.DataFrame, plot_start_date: pd.Timestamp) -> pd.DataFrame:
@@ -580,6 +605,74 @@ def daily_sales_performance(df: pd.DataFrame) -> dict:
     }
 
 
+def yearly_tax_summary(df_sales: pd.DataFrame, df_donations: pd.DataFrame) -> pd.DataFrame:
+    """Summarizes non-Venmo sales and tax-deductible donations by tax year."""
+    summary_columns = [
+        "Year",
+        "Non-Venmo Sales",
+        "Donation Deduction",
+        "Taxable Total",
+        "Taxable Sale Count",
+        "Donation Count",
+    ]
+
+    if "venmo_flag" in df_sales.columns:
+        sales = df_sales.dropna(subset=["sale_date"]).copy()
+        sales["venmo_flag_numeric"] = pd.to_numeric(sales["venmo_flag"], errors="coerce")
+        sales["revenue"] = pd.to_numeric(sales["revenue"], errors="coerce")
+        taxable_sales = sales[sales["venmo_flag_numeric"].eq(0)].dropna(subset=["revenue"]).copy()
+        if taxable_sales.empty:
+            sales_summary = pd.DataFrame(columns=["Year", "Non-Venmo Sales", "Taxable Sale Count"])
+        else:
+            taxable_sales["Year"] = taxable_sales["sale_date"].dt.year
+            sales_summary = (
+                taxable_sales.groupby("Year", as_index=False)
+                .agg(
+                    **{
+                        "Non-Venmo Sales": ("revenue", "sum"),
+                        "Taxable Sale Count": ("revenue", "count"),
+                    }
+                )
+            )
+    else:
+        sales_summary = pd.DataFrame(columns=["Year", "Non-Venmo Sales", "Taxable Sale Count"])
+
+    if df_donations.empty:
+        donation_summary = pd.DataFrame(columns=["Year", "Donation Deduction", "Donation Count"])
+    else:
+        donations = df_donations.dropna(subset=["Donated", "Value"]).copy()
+        if donations.empty:
+            donation_summary = pd.DataFrame(columns=["Year", "Donation Deduction", "Donation Count"])
+        else:
+            donations["Year"] = donations["Donated"].dt.year
+            donation_summary = (
+                donations.groupby("Year", as_index=False)
+                .agg(
+                    **{
+                        "Donation Deduction": ("Value", "sum"),
+                        "Donation Count": ("Value", "count"),
+                    }
+                )
+            )
+
+    summary = pd.merge(sales_summary, donation_summary, on="Year", how="outer")
+    if summary.empty:
+        return pd.DataFrame(columns=summary_columns)
+
+    fill_values = {
+        "Non-Venmo Sales": 0,
+        "Donation Deduction": 0,
+        "Taxable Sale Count": 0,
+        "Donation Count": 0,
+    }
+    summary = summary.fillna(fill_values)
+    summary["Year"] = summary["Year"].astype(int)
+    summary["Taxable Sale Count"] = summary["Taxable Sale Count"].astype(int)
+    summary["Donation Count"] = summary["Donation Count"].astype(int)
+    summary["Taxable Total"] = summary["Non-Venmo Sales"] - summary["Donation Deduction"]
+    return summary[summary_columns].sort_values("Year", ascending=False)
+
+
 def daily_profit(df: pd.DataFrame, df_costs: pd.DataFrame) -> pd.DataFrame:
     sales = (
         df.dropna(subset=["sale_date"])
@@ -841,11 +934,19 @@ except Exception as e:
     listings_load_error = e
     df_listings = pd.DataFrame()
 
+donations_load_error = None
+try:
+    df_donations = import_donations_data()
+except Exception as e:
+    donations_load_error = e
+    df_donations = pd.DataFrame()
+
 listing_sale_records = listing_to_sale_records(filtered, df_listings)
 avg_listing_to_sale_days = (
     listing_sale_records["days_to_sale"].mean() if not listing_sale_records.empty else np.nan
 )
 auction_listing_records = auction_to_listing_records(df_listings)
+tax_summary = yearly_tax_summary(df, df_donations)
 
 sold_items = filtered[filtered["sale_date"].notna()].copy()
 total_revenue = sold_items["revenue"].sum()
@@ -868,8 +969,8 @@ c6.metric(
 
 st.divider()
 
-tab_overview, tab_auctions, tab_listings, tab_categories, tab_recent, tab_raw = st.tabs([
-    "Overview", "By auction", "Listings", "Categories", "Recent sales", "Raw data"
+tab_overview, tab_auctions, tab_listings, tab_donations, tab_categories, tab_recent, tab_raw = st.tabs([
+    "Overview", "By auction", "Listings", "Donations", "Categories", "Recent sales", "Raw data"
 ])
 
 with tab_overview:
@@ -1003,6 +1104,75 @@ with tab_listings:
         st.plotly_chart(build_listing_to_sale_distribution(listing_sale_records), use_container_width=True)
     else:
         st.info("No sold listings with both a listing date and sale date were found for this sale date range.")
+
+with tab_donations:
+    st.subheader("Tax summary by year")
+    st.caption("Uses all loaded sales and donations. Non-Venmo sales are rows where `venmo_flag` is 0.")
+
+    if donations_load_error is not None:
+        st.error("Could not load the Donations Google Sheet tab. Make sure the sheet is shared/public or accessible as CSV.")
+        st.exception(donations_load_error)
+
+    if not tax_summary.empty:
+        totals = tax_summary.sum(numeric_only=True)
+        donation_cols = st.columns(3)
+        donation_cols[0].metric("Non-Venmo Sales", f"${totals['Non-Venmo Sales']:,.0f}")
+        donation_cols[1].metric("Donation Deduction", f"${totals['Donation Deduction']:,.0f}")
+        donation_cols[2].metric("Taxable Total", f"${totals['Taxable Total']:,.0f}")
+
+        chart_data = tax_summary.sort_values("Year")
+        fig_tax = go.Figure()
+        fig_tax.add_bar(x=chart_data["Year"], y=chart_data["Non-Venmo Sales"], name="Non-Venmo Sales")
+        fig_tax.add_bar(x=chart_data["Year"], y=chart_data["Donation Deduction"], name="Donation Deduction")
+        fig_tax.add_scatter(
+            x=chart_data["Year"],
+            y=chart_data["Taxable Total"],
+            name="Taxable Total",
+            mode="lines+markers+text",
+            text=chart_data["Taxable Total"].map(lambda value: f"${value:,.0f}"),
+            textposition="top center",
+        )
+        fig_tax.update_layout(
+            barmode="group",
+            xaxis_title="Year",
+            yaxis_title="Dollars",
+            yaxis=dict(tickformat="$,.0f"),
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+        )
+        st.plotly_chart(fig_tax, use_container_width=True)
+
+        st.dataframe(
+            tax_summary.style.format({
+                "Non-Venmo Sales": "${:,.2f}",
+                "Donation Deduction": "${:,.2f}",
+                "Taxable Total": "${:,.2f}",
+                "Taxable Sale Count": "{:,.0f}",
+                "Donation Count": "{:,.0f}",
+            }),
+            use_container_width=True,
+        )
+    else:
+        st.info("No donation or non-Venmo sales data found.")
+
+    if not df_donations.empty:
+        donation_detail_columns = [
+            column for column in ["Donated", "Item", "Value", "Condition", "Received date", "Receved how"]
+            if column in df_donations.columns
+        ]
+        donation_details = (
+            df_donations.dropna(subset=["Donated", "Value"])
+            .sort_values("Donated", ascending=False)[donation_detail_columns]
+        )
+        st.subheader("Donation records")
+        st.dataframe(
+            donation_details.style.format({
+                "Value": "${:,.2f}",
+                "Donated": format_date_for_display,
+                "Received date": format_date_for_display,
+            }),
+            use_container_width=True,
+        )
 
 with tab_categories:
     st.subheader("Category performance")
