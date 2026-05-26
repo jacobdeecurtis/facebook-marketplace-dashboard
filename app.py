@@ -31,6 +31,7 @@ AUCTIONS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?t
 DONATIONS_CSV_URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&gid={DONATIONS_GID}"
 AUCTION_TAB_EXCLUDED_DATES = pd.to_datetime(["2026-05-14"])
 CUMULATIVE_PROFIT_EXCLUDED_DATES = pd.to_datetime(["2025-01-01", "2026-01-01"])
+TAX_YEAR = 2026
 
 
 def money_to_number(series: pd.Series) -> pd.Series:
@@ -1106,21 +1107,22 @@ with tab_listings:
         st.info("No sold listings with both a listing date and sale date were found for this sale date range.")
 
 with tab_donations:
-    st.subheader("Tax summary by year")
-    st.caption("Uses all loaded sales and donations. Non-Venmo sales are rows where `venmo_flag` is 0.")
+    st.subheader(f"{TAX_YEAR} tax summary")
+    st.caption(f"Uses {TAX_YEAR} sales and donations only. Non-Venmo sales are rows where `venmo_flag` is 0.")
 
     if donations_load_error is not None:
         st.error("Could not load the Donations Google Sheet tab. Make sure the sheet is shared/public or accessible as CSV.")
         st.exception(donations_load_error)
 
-    if not tax_summary.empty:
-        totals = tax_summary.sum(numeric_only=True)
+    tax_year_summary = tax_summary[tax_summary["Year"].eq(TAX_YEAR)].copy()
+    if not tax_year_summary.empty:
+        totals = tax_year_summary.iloc[0]
         donation_cols = st.columns(3)
         donation_cols[0].metric("Non-Venmo Sales", f"${totals['Non-Venmo Sales']:,.0f}")
         donation_cols[1].metric("Donation Deduction", f"${totals['Donation Deduction']:,.0f}")
         donation_cols[2].metric("Taxable Total", f"${totals['Taxable Total']:,.0f}")
 
-        chart_data = tax_summary.sort_values("Year")
+        chart_data = tax_year_summary.sort_values("Year")
         fig_tax = go.Figure()
         fig_tax.add_bar(x=chart_data["Year"], y=chart_data["Non-Venmo Sales"], name="Non-Venmo Sales")
         fig_tax.add_bar(x=chart_data["Year"], y=chart_data["Donation Deduction"], name="Donation Deduction")
@@ -1143,7 +1145,7 @@ with tab_donations:
         st.plotly_chart(fig_tax, use_container_width=True)
 
         st.dataframe(
-            tax_summary.style.format({
+            tax_year_summary.style.format({
                 "Non-Venmo Sales": "${:,.2f}",
                 "Donation Deduction": "${:,.2f}",
                 "Taxable Total": "${:,.2f}",
@@ -1153,7 +1155,7 @@ with tab_donations:
             use_container_width=True,
         )
     else:
-        st.info("No donation or non-Venmo sales data found.")
+        st.info(f"No {TAX_YEAR} donation or non-Venmo sales data found.")
 
     if not df_donations.empty:
         donation_detail_columns = [
@@ -1162,6 +1164,7 @@ with tab_donations:
         ]
         donation_details = (
             df_donations.dropna(subset=["Donated", "Value"])
+            .loc[lambda data: data["Donated"].dt.year.eq(TAX_YEAR)]
             .sort_values("Donated", ascending=False)[donation_detail_columns]
         )
         st.subheader("Donation records")
