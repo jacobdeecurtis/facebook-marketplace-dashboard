@@ -69,9 +69,11 @@ def import_auction_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         df_costs.dropna(subset=["Auction_Date"])[["Auction_Number", "Auction_Date", "auction_cost"]]
         .copy()
     )
-    df_costs["Auction_Number"] = df_costs["Auction_Number"].astype(str).str.strip()
-    df_auction_cost = df_costs[df_costs["Auction_Number"].ne("") & df_costs["Auction_Number"].ne("nan")].copy()
-    df_other_cost = df_costs[df_costs["Auction_Number"].eq("") | df_costs["Auction_Number"].eq("nan")].copy()
+    auction_number = df_costs["Auction_Number"].astype("string").str.strip()
+    has_auction_number = auction_number.notna() & auction_number.ne("") & auction_number.str.casefold().ne("nan")
+    df_costs["Auction_Number"] = auction_number.where(has_auction_number, "").astype(str)
+    df_auction_cost = df_costs[has_auction_number].copy()
+    df_other_cost = df_costs[~has_auction_number].copy()
 
     merged_df = pd.merge(df_google_sheet, df_auction_cost, on="Auction_Date", how="left")
     return merged_df, df_auction_cost, df_other_cost
