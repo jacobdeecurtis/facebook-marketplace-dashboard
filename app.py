@@ -867,6 +867,36 @@ def category_summary(df: pd.DataFrame) -> pd.DataFrame:
         .sort_values("total_revenue", ascending=False)
     )
 
+
+def top_selling_product_categories(df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
+    category_column = next(
+        (column for column in ["product_categories", "product_category"] if column in df.columns),
+        None,
+    )
+    if category_column is None or df.empty:
+        return pd.DataFrame(columns=["Product Category", "Items Sold", "Total Revenue", "Average Sale Price"])
+
+    data = df.dropna(subset=[category_column, "revenue"]).copy()
+    data[category_column] = data[category_column].astype(str).str.strip()
+    data = data[data[category_column].ne("")]
+    if data.empty:
+        return pd.DataFrame(columns=["Product Category", "Items Sold", "Total Revenue", "Average Sale Price"])
+
+    return (
+        data.groupby(category_column, as_index=False)
+        .agg(
+            **{
+                "Items Sold": ("revenue", "count"),
+                "Total Revenue": ("revenue", "sum"),
+                "Average Sale Price": ("revenue", "mean"),
+            }
+        )
+        .rename(columns={category_column: "Product Category"})
+        .sort_values(["Total Revenue", "Items Sold"], ascending=False)
+        .head(limit)
+    )
+
+
 def find_header_image() -> Path | None:
     return next((path for path in HEADER_IMAGE_PATHS if path.exists()), None)
 
@@ -1053,6 +1083,19 @@ with tab_auctions:
         st.plotly_chart(build_auction_cumulative_profit_figure(df_cumulative_profit), use_container_width=True)
     else:
         st.info("No cumulative auction profit data found.")
+
+    st.subheader("Top 5 highest selling product categories")
+    top_categories = top_selling_product_categories(filtered)
+    if not top_categories.empty:
+        st.dataframe(
+            top_categories.style.format({
+                "Total Revenue": "${:,.0f}",
+                "Average Sale Price": "${:,.0f}",
+            }),
+            use_container_width=True,
+        )
+    else:
+        st.info("No product category sales data found.")
 
     display_summary = auction_tab_summary.copy()
     st.dataframe(
