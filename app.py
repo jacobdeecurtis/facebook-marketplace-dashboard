@@ -537,6 +537,65 @@ def build_auction_cumulative_profit_figure(df_cumulative_profit: pd.DataFrame) -
     return fig
 
 
+def cumulative_profit_axis_ranges(df_cumulative_profit: pd.DataFrame) -> tuple[list[float], list[float]]:
+    max_days = df_cumulative_profit["time_since_auction"].max()
+    min_profit = min(0, df_cumulative_profit["cumulative_profit"].min())
+    max_profit = max(0, df_cumulative_profit["cumulative_profit"].max())
+    profit_padding = max((max_profit - min_profit) * 0.05, 1)
+    return [0, max_days], [min_profit - profit_padding, max_profit + profit_padding]
+
+
+def build_single_auction_cumulative_profit_figure(
+    df_cumulative_profit: pd.DataFrame,
+    auction_date: pd.Timestamp,
+    x_range: list[float],
+    y_range: list[float],
+) -> go.Figure:
+    df_auction = (
+        df_cumulative_profit[df_cumulative_profit["Auction_Date"].dt.normalize() == auction_date.normalize()]
+        .sort_values("time_since_auction")
+    )
+    fig = go.Figure()
+    if df_auction.empty:
+        return fig
+
+    final_profit = df_auction["cumulative_profit"].iloc[-1]
+    fig.add_trace(go.Scatter(
+        x=df_auction["time_since_auction"],
+        y=df_auction["cumulative_profit"],
+        mode="lines+text",
+        name=auction_date.strftime("%Y-%m-%d"),
+        hovertemplate=(
+            "<b>%{fullData.name}</b><br>"
+            "Days since auction: %{x}<br>"
+            "Cumulative profit: %{y:$,.0f}<extra></extra>"
+        ),
+        text=[""] * (len(df_auction) - 1) + [f"${final_profit:,.0f}"],
+        textposition="top right",
+    ))
+    fig.add_shape(
+        type="line",
+        x0=x_range[0],
+        y0=0,
+        x1=x_range[1],
+        y1=0,
+        line=dict(color="Red", width=2, dash="dash"),
+    )
+    fig.update_layout(
+        title=f"Cumulative Profit: {auction_date:%Y-%m-%d}",
+        xaxis_title="Days Since Auction",
+        yaxis_title="Cumulative Profit ($)",
+        xaxis=dict(range=x_range),
+        yaxis=dict(range=y_range, tickformat="$,.0f"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        height=360,
+        showlegend=False,
+        margin=dict(t=60, b=40),
+    )
+    return fig
+
+
 def format_week_label(row: pd.Series) -> str:
     start = row["week_start"]
     end = row["week_end"]
@@ -1092,7 +1151,9 @@ with tab_auctions:
 
     if not df_cumulative_profit.empty:
         st.plotly_chart(build_auction_cumulative_profit_figure(df_cumulative_profit), use_container_width=True)
+        cumulative_profit_x_range, cumulative_profit_y_range = cumulative_profit_axis_ranges(df_cumulative_profit)
     else:
+        cumulative_profit_x_range, cumulative_profit_y_range = None, None
         st.info("No cumulative auction profit data found.")
 
     st.subheader("Top 5 highest selling product categories per auction")
@@ -1108,6 +1169,22 @@ with tab_auctions:
                 }),
                 use_container_width=True,
             )
+            if cumulative_profit_x_range is not None and cumulative_profit_y_range is not None:
+                auction_timestamp = pd.to_datetime(auction_date, errors="coerce")
+                if pd.notna(auction_timestamp):
+                    auction_profit = df_cumulative_profit[
+                        df_cumulative_profit["Auction_Date"].dt.normalize() == auction_timestamp.normalize()
+                    ]
+                    if not auction_profit.empty:
+                        st.plotly_chart(
+                            build_single_auction_cumulative_profit_figure(
+                                df_cumulative_profit,
+                                auction_timestamp,
+                                cumulative_profit_x_range,
+                                cumulative_profit_y_range,
+                            ),
+                            use_container_width=True,
+                        )
     else:
         st.info("No product category sales data found.")
 
