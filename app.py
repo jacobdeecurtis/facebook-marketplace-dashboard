@@ -1098,13 +1098,16 @@ with tab_auctions:
     st.subheader("Top 5 highest selling product categories per auction")
     top_categories = top_selling_product_categories(filtered)
     if not top_categories.empty:
-        st.dataframe(
-            top_categories.style.format({
-                "Total Revenue": "${:,.0f}",
-                "Average Sale Price": "${:,.0f}",
-            }),
-            use_container_width=True,
-        )
+        for auction_date, auction_categories in top_categories.groupby("Auction Date", sort=True):
+            st.markdown(f"**Auction: {auction_date}**")
+            display_categories = auction_categories.drop(columns=["Auction Date"])
+            st.dataframe(
+                display_categories.style.format({
+                    "Total Revenue": "${:,.0f}",
+                    "Average Sale Price": "${:,.0f}",
+                }),
+                use_container_width=True,
+            )
     else:
         st.info("No product category sales data found.")
 
