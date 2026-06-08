@@ -873,17 +873,25 @@ def top_selling_product_categories(df: pd.DataFrame, limit: int = 5) -> pd.DataF
         (column for column in ["product_categories", "product_category"] if column in df.columns),
         None,
     )
-    if category_column is None or df.empty:
-        return pd.DataFrame(columns=["Product Category", "Items Sold", "Total Revenue", "Average Sale Price"])
+    output_columns = [
+        "Auction Date",
+        "Rank",
+        "Product Category",
+        "Items Sold",
+        "Total Revenue",
+        "Average Sale Price",
+    ]
+    if category_column is None or df.empty or "Auction_Date" not in df.columns:
+        return pd.DataFrame(columns=output_columns)
 
-    data = df.dropna(subset=[category_column, "revenue"]).copy()
+    data = df.dropna(subset=["Auction_Date", category_column, "revenue"]).copy()
     data[category_column] = data[category_column].astype(str).str.strip()
     data = data[data[category_column].ne("")]
     if data.empty:
-        return pd.DataFrame(columns=["Product Category", "Items Sold", "Total Revenue", "Average Sale Price"])
+        return pd.DataFrame(columns=output_columns)
 
-    return (
-        data.groupby(category_column, as_index=False)
+    summary = (
+        data.groupby(["Auction_Date", category_column], as_index=False)
         .agg(
             **{
                 "Items Sold": ("revenue", "count"),
@@ -891,10 +899,13 @@ def top_selling_product_categories(df: pd.DataFrame, limit: int = 5) -> pd.DataF
                 "Average Sale Price": ("revenue", "mean"),
             }
         )
-        .rename(columns={category_column: "Product Category"})
-        .sort_values(["Total Revenue", "Items Sold"], ascending=False)
-        .head(limit)
+        .sort_values(["Auction_Date", "Total Revenue", "Items Sold"], ascending=[True, False, False])
     )
+    summary["Rank"] = summary.groupby("Auction_Date").cumcount() + 1
+    summary = summary[summary["Rank"].le(limit)].copy()
+    summary["Auction Date"] = summary["Auction_Date"].dt.strftime("%Y-%m-%d")
+    summary = summary.rename(columns={category_column: "Product Category"})
+    return summary[output_columns]
 
 
 def find_header_image() -> Path | None:
@@ -1084,7 +1095,7 @@ with tab_auctions:
     else:
         st.info("No cumulative auction profit data found.")
 
-    st.subheader("Top 5 highest selling product categories")
+    st.subheader("Top 5 highest selling product categories per auction")
     top_categories = top_selling_product_categories(filtered)
     if not top_categories.empty:
         st.dataframe(
