@@ -592,6 +592,7 @@ def build_single_auction_cumulative_profit_figure(
         y=df_auction["cumulative_profit"],
         mode="lines+text",
         name=auction_date.strftime("%Y-%m-%d"),
+        line=dict(color="#636EFA", width=3),
         hovertemplate=(
             "<b>%{fullData.name}</b><br>"
             "Days since auction: %{x}<br>"
