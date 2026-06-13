@@ -561,12 +561,38 @@ def build_single_auction_cumulative_profit_figure(
     if df_auction.empty:
         return fig
 
+    selected_auction_date = auction_date.normalize()
+    comparison_dates = sorted(
+        df_cumulative_profit["Auction_Date"].dropna().dt.normalize().unique()
+    )
+    for comparison_date in comparison_dates:
+        if comparison_date == selected_auction_date:
+            continue
+
+        df_comparison = (
+            df_cumulative_profit[df_cumulative_profit["Auction_Date"].dt.normalize() == comparison_date]
+            .sort_values("time_since_auction")
+        )
+        if df_comparison.empty:
+            continue
+
+        fig.add_trace(go.Scatter(
+            x=df_comparison["time_since_auction"],
+            y=df_comparison["cumulative_profit"],
+            mode="lines",
+            name=comparison_date.strftime("%Y-%m-%d"),
+            line=dict(color="rgba(150, 150, 150, 0.35)", width=1.5),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+
     final_profit = df_auction["cumulative_profit"].iloc[-1]
     fig.add_trace(go.Scatter(
         x=df_auction["time_since_auction"],
         y=df_auction["cumulative_profit"],
         mode="lines+text",
         name=auction_date.strftime("%Y-%m-%d"),
+        line=dict(color="#636EFA", width=3),
         hovertemplate=(
             "<b>%{fullData.name}</b><br>"
             "Days since auction: %{x}<br>"
