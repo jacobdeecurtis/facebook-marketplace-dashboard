@@ -1,4 +1,5 @@
 import base64
+from html import escape
 import mimetypes
 from datetime import datetime
 from pathlib import Path
@@ -550,6 +551,7 @@ def build_single_auction_cumulative_profit_figure(
     auction_date: pd.Timestamp,
     x_range: list[float],
     y_range: list[float],
+    top_product_names: list[str] | None = None,
 ) -> go.Figure:
     df_auction = (
         df_cumulative_profit[df_cumulative_profit["Auction_Date"].dt.normalize() == auction_date.normalize()]
@@ -581,6 +583,27 @@ def build_single_auction_cumulative_profit_figure(
         y1=0,
         line=dict(color="Red", width=2, dash="dash"),
     )
+    if top_product_names:
+        product_text = "<br>".join(
+            f"{rank}. {escape(product_name)}"
+            for rank, product_name in enumerate(top_product_names[:5], start=1)
+        )
+        fig.add_annotation(
+            xref="paper",
+            yref="paper",
+            x=0.98,
+            y=0.98,
+            xanchor="right",
+            yanchor="top",
+            align="left",
+            text=f"<b>Top 5 by items sold</b><br>{product_text}",
+            showarrow=False,
+            bordercolor="#D9DEE8",
+            borderwidth=1,
+            borderpad=8,
+            bgcolor="rgba(255, 255, 255, 0.88)",
+            font=dict(size=12, color="#1F2937"),
+        )
     fig.update_layout(
         title=f"Cumulative Profit: {auction_date:%Y-%m-%d}",
         xaxis_title="Days Since Auction",
@@ -927,43 +950,39 @@ def category_summary(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def top_selling_product_categories(df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
-    category_column = next(
-        (column for column in ["product_categories", "product_category"] if column in df.columns),
+def top_selling_product_names(df: pd.DataFrame, limit: int = 5) -> pd.DataFrame:
+    name_column = next(
+        (column for column in ["product", "Title", "product_categories", "product_category"] if column in df.columns),
         None,
     )
     output_columns = [
         "Auction Date",
         "Rank",
-        "Product Category",
-        "Items Sold",
-        "Total Revenue",
-        "Average Sale Price",
+        "Product Name",
     ]
-    if category_column is None or df.empty or "Auction_Date" not in df.columns:
+    if name_column is None or df.empty or "Auction_Date" not in df.columns:
         return pd.DataFrame(columns=output_columns)
 
-    data = df.dropna(subset=["Auction_Date", category_column, "revenue"]).copy()
-    data[category_column] = data[category_column].astype(str).str.strip()
-    data = data[data[category_column].ne("")]
+    data = df.dropna(subset=["Auction_Date", name_column, "revenue"]).copy()
+    data[name_column] = data[name_column].astype(str).str.strip()
+    data = data[data[name_column].ne("")]
     if data.empty:
         return pd.DataFrame(columns=output_columns)
 
     summary = (
-        data.groupby(["Auction_Date", category_column], as_index=False)
+        data.groupby(["Auction_Date", name_column], as_index=False)
         .agg(
             **{
                 "Items Sold": ("revenue", "count"),
                 "Total Revenue": ("revenue", "sum"),
-                "Average Sale Price": ("revenue", "mean"),
             }
         )
-        .sort_values(["Auction_Date", "Total Revenue", "Items Sold"], ascending=[True, False, False])
+        .sort_values(["Auction_Date", "Items Sold", "Total Revenue"], ascending=[True, False, False])
     )
     summary["Rank"] = summary.groupby("Auction_Date").cumcount() + 1
     summary = summary[summary["Rank"].le(limit)].copy()
     summary["Auction Date"] = summary["Auction_Date"].dt.strftime("%Y-%m-%d")
-    summary = summary.rename(columns={category_column: "Product Category"})
+    summary = summary.rename(columns={name_column: "Product Name"})
     return summary[output_columns]
 
 
@@ -1156,37 +1175,37 @@ with tab_auctions:
         cumulative_profit_x_range, cumulative_profit_y_range = None, None
         st.info("No cumulative auction profit data found.")
 
-    st.subheader("Top 5 highest selling product categories per auction")
-    top_categories = top_selling_product_categories(filtered)
-    if not top_categories.empty:
-        for auction_date, auction_categories in top_categories.groupby("Auction Date", sort=True):
-            st.markdown(f"**Auction: {auction_date}**")
-            display_categories = auction_categories.drop(columns=["Auction Date"])
-            st.dataframe(
-                display_categories.style.format({
-                    "Total Revenue": "${:,.0f}",
-                    "Average Sale Price": "${:,.0f}",
-                }),
+    st.subheader("Auction charts with top 5 products")
+    top_products = top_selling_product_names(filtered)
+    if (
+        cumulative_profit_x_range is not None
+        and cumulative_profit_y_range is not None
+        and not top_products.empty
+    ):
+        for auction_date, auction_products in top_products.groupby("Auction Date", sort=True):
+            auction_timestamp = pd.to_datetime(auction_date, errors="coerce")
+            if pd.isna(auction_timestamp):
+                continue
+
+            auction_profit = df_cumulative_profit[
+                df_cumulative_profit["Auction_Date"].dt.normalize() == auction_timestamp.normalize()
+            ]
+            if auction_profit.empty:
+                continue
+
+            product_names = auction_products.sort_values("Rank")["Product Name"].tolist()
+            st.plotly_chart(
+                build_single_auction_cumulative_profit_figure(
+                    df_cumulative_profit,
+                    auction_timestamp,
+                    cumulative_profit_x_range,
+                    cumulative_profit_y_range,
+                    product_names,
+                ),
                 use_container_width=True,
             )
-            if cumulative_profit_x_range is not None and cumulative_profit_y_range is not None:
-                auction_timestamp = pd.to_datetime(auction_date, errors="coerce")
-                if pd.notna(auction_timestamp):
-                    auction_profit = df_cumulative_profit[
-                        df_cumulative_profit["Auction_Date"].dt.normalize() == auction_timestamp.normalize()
-                    ]
-                    if not auction_profit.empty:
-                        st.plotly_chart(
-                            build_single_auction_cumulative_profit_figure(
-                                df_cumulative_profit,
-                                auction_timestamp,
-                                cumulative_profit_x_range,
-                                cumulative_profit_y_range,
-                            ),
-                            use_container_width=True,
-                        )
     else:
-        st.info("No product category sales data found.")
+        st.info("No product sales data found.")
 
     display_summary = auction_tab_summary.copy()
     st.dataframe(
