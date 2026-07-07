@@ -631,7 +631,10 @@ def build_single_auction_cumulative_profit_figure(
             font=dict(size=12, color="#1F2937"),
         )
     fig.update_layout(
-        title=f"Cumulative Profit: {auction_date:%Y-%m-%d}",
+        title=dict(
+            text=f"Cumulative Profit: {auction_date:%Y-%m-%d}",
+            font=dict(color="#111827", size=18),
+        ),
         xaxis_title="Days Since Auction",
         yaxis_title="Cumulative Profit ($)",
         xaxis=dict(range=x_range),
