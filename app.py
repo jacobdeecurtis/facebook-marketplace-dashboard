@@ -141,6 +141,49 @@ def daily_listing_counts(df_listings: pd.DataFrame, plot_start_date: pd.Timestam
     return all_daily_listings[all_daily_listings["Listing_Date"] >= plot_start_date]
 
 
+def longest_unsold_listings(
+    df_listings: pd.DataFrame,
+    today: pd.Timestamp | None = None,
+    limit: int = 25,
+) -> pd.DataFrame:
+    """Returns the oldest listings that are not marked sold."""
+    display_columns = [
+        "Title",
+        "Listing_Date",
+        "Days Listed",
+        "Auction_Date",
+        "Storage_Location",
+    ]
+    if df_listings.empty or "Listing_Date" not in df_listings.columns:
+        return pd.DataFrame(columns=display_columns)
+
+    listings = df_listings.dropna(subset=["Listing_Date"]).copy()
+    if listings.empty:
+        return pd.DataFrame(columns=display_columns)
+
+    if "Sold" in listings.columns:
+        sold_status = listings["Sold"].fillna("").astype(str).str.strip().str.casefold()
+        sold_values = {"1", "true", "yes", "y", "sold", "x"}
+        listings = listings[~sold_status.isin(sold_values)].copy()
+
+    if listings.empty:
+        return pd.DataFrame(columns=display_columns)
+
+    current_day = (today or pd.Timestamp(datetime.now(ZoneInfo("America/Denver")).date())).normalize()
+    listings["Listing_Date"] = pd.to_datetime(listings["Listing_Date"], errors="coerce").dt.normalize()
+    listings["Days Listed"] = (current_day - listings["Listing_Date"]).dt.days
+    listings = listings[listings["Days Listed"] >= 0].copy()
+    if listings.empty:
+        return pd.DataFrame(columns=display_columns)
+
+    available_columns = [column for column in display_columns if column in listings.columns]
+    return (
+        listings.sort_values(["Listing_Date", "Title"], ascending=[True, True])
+        .head(limit)[available_columns]
+        .reset_index(drop=True)
+    )
+
+
 def build_daily_listings_figure(daily_listings: pd.DataFrame) -> go.Figure:
     fig = go.Figure(
         data=[
@@ -1249,6 +1292,22 @@ with tab_auctions:
     )
 
 with tab_listings:
+    st.subheader("Longest unsold listings")
+    if listings_load_error is None and not df_listings.empty:
+        unsold_listings = longest_unsold_listings(df_listings)
+        if not unsold_listings.empty:
+            st.dataframe(
+                unsold_listings.style.format({
+                    "Listing_Date": format_date_for_display,
+                    "Auction_Date": format_date_for_display,
+                    "Days Listed": "{:,.0f}",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("No unsold listings were found.")
+
     st.subheader("Listings per day")
     plot_start_date = pd.to_datetime("2026-04-30")
 
