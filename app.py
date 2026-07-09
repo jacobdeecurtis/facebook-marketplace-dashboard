@@ -89,9 +89,9 @@ def import_listings_data() -> pd.DataFrame:
 
     if "Auction_Date" in df_listings.columns:
         df_listings["Auction_Date"] = pd.to_datetime(df_listings["Auction_Date"], errors="coerce")
-    df_listings["Listing_Date"] = pd.to_datetime(df_listings["Listing_Date"], errors="coerce")
-    df_listings = df_listings.dropna(subset=["Listing_Date"]).copy()
-    df_listings["Listing_Date"] = df_listings["Listing_Date"].dt.normalize()
+    df_listings["Listing_Timestamp"] = pd.to_datetime(df_listings["Listing_Date"], errors="coerce")
+    df_listings = df_listings.dropna(subset=["Listing_Timestamp"]).copy()
+    df_listings["Listing_Date"] = df_listings["Listing_Timestamp"].dt.normalize()
     return df_listings
 
 
@@ -209,6 +209,78 @@ def build_daily_listings_figure(daily_listings: pd.DataFrame) -> go.Figure:
         plot_bgcolor="white",
         paper_bgcolor="white",
         xaxis=dict(tickformat="%Y-%m-%d", dtick="D1"),
+    )
+    return fig
+
+
+def weekly_average_listing_duration(df_listings: pd.DataFrame) -> pd.DataFrame:
+    """Returns weekly average minutes between adjacent same-day listing timestamps."""
+    output_columns = [
+        "week_start",
+        "week_end",
+        "week_label",
+        "avg_minutes_to_list",
+        "interval_count",
+        "avg_minutes_label",
+    ]
+    if df_listings.empty or "Listing_Timestamp" not in df_listings.columns:
+        return pd.DataFrame(columns=output_columns)
+
+    listings = df_listings.dropna(subset=["Listing_Timestamp"]).copy()
+    if listings.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    listings["Listing_Timestamp"] = pd.to_datetime(listings["Listing_Timestamp"], errors="coerce")
+    listings = listings.dropna(subset=["Listing_Timestamp"]).sort_values("Listing_Timestamp")
+    listings["listing_day"] = listings["Listing_Timestamp"].dt.normalize()
+    listings["previous_listing_timestamp"] = listings.groupby("listing_day")["Listing_Timestamp"].shift(1)
+    listings["minutes_to_list"] = (
+        listings["Listing_Timestamp"] - listings["previous_listing_timestamp"]
+    ).dt.total_seconds() / 60
+    listing_durations = listings[
+        listings["minutes_to_list"].ge(1)
+        & listings["minutes_to_list"].le(60)
+    ].copy()
+    if listing_durations.empty:
+        return pd.DataFrame(columns=output_columns)
+
+    listing_durations["week_start"] = (
+        listing_durations["Listing_Timestamp"].dt.to_period("W-SUN").apply(lambda period: period.start_time)
+    )
+    weekly = (
+        listing_durations.groupby("week_start", as_index=False)
+        .agg(
+            avg_minutes_to_list=("minutes_to_list", "mean"),
+            interval_count=("minutes_to_list", "count"),
+        )
+        .sort_values("week_start")
+    )
+    weekly["week_end"] = weekly["week_start"] + pd.Timedelta(days=6)
+    weekly["week_label"] = weekly.apply(format_week_label, axis=1)
+    weekly["avg_minutes_label"] = weekly["avg_minutes_to_list"].map(lambda value: f"{value:.1f}")
+    return weekly[output_columns]
+
+
+def build_average_listing_duration_figure(weekly_listing_duration: pd.DataFrame) -> go.Figure:
+    fig = px.bar(
+        weekly_listing_duration,
+        x="week_label",
+        y="avg_minutes_to_list",
+        text="avg_minutes_label",
+        title="Average Time to List a Product by Week",
+        hover_data={
+            "week_label": True,
+            "avg_minutes_to_list": ":.1f",
+            "interval_count": True,
+        },
+    )
+    fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_layout(
+        xaxis_title="Week",
+        yaxis_title="Average minutes between listings",
+        xaxis_tickangle=-45,
+        plot_bgcolor="white",
+        paper_bgcolor="white",
     )
     return fig
 
@@ -1323,6 +1395,17 @@ with tab_listings:
             st.info(f"No listings found on or after {plot_start_date:%Y-%m-%d}.")
     else:
         st.info("Listings data is empty, so there is nothing to chart.")
+
+    st.subheader("Average time to list")
+    if listings_load_error is None and not df_listings.empty:
+        weekly_listing_duration = weekly_average_listing_duration(df_listings)
+        if not weekly_listing_duration.empty:
+            st.plotly_chart(
+                build_average_listing_duration_figure(weekly_listing_duration),
+                use_container_width=True,
+            )
+        else:
+            st.info("No same-day listing intervals between 1 minute and 1 hour were found.")
 
     st.subheader("Auction to listing timing")
     if not auction_listing_records.empty:
