@@ -262,25 +262,44 @@ def weekly_average_listing_duration(df_listings: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_average_listing_duration_figure(weekly_listing_duration: pd.DataFrame) -> go.Figure:
+    total_intervals = weekly_listing_duration["interval_count"].sum()
+    overall_average = (
+        (weekly_listing_duration["avg_minutes_to_list"] * weekly_listing_duration["interval_count"]).sum()
+        / total_intervals
+        if total_intervals
+        else 0
+    )
     fig = px.bar(
         weekly_listing_duration,
         x="week_label",
         y="avg_minutes_to_list",
         text="avg_minutes_label",
-        title="Average Time to List a Product by Week",
+        title=(
+            "Average Time to List a Product by Week"
+            f"<br><sup>Overall average: {overall_average:.1f} minutes between listings</sup>"
+        ),
         hover_data={
             "week_label": True,
             "avg_minutes_to_list": ":.1f",
             "interval_count": True,
         },
     )
-    fig.update_traces(textposition="outside", cliponaxis=False)
+    fig.update_traces(
+        marker_color="#2563eb",
+        textfont=dict(color="#111827", size=14),
+        textposition="outside",
+        cliponaxis=False,
+    )
     fig.update_layout(
+        font=dict(color="#111827", size=13),
         xaxis_title="Week",
         yaxis_title="Average minutes between listings",
         xaxis_tickangle=-45,
         plot_bgcolor="white",
         paper_bgcolor="white",
+        title_font=dict(color="#111827", size=20),
+        xaxis=dict(tickfont=dict(color="#111827", size=12), title_font=dict(color="#111827", size=13)),
+        yaxis=dict(tickfont=dict(color="#111827", size=12), title_font=dict(color="#111827", size=13)),
     )
     return fig
 
