@@ -90,7 +90,6 @@ def import_listings_data() -> pd.DataFrame:
     if "Auction_Date" in df_listings.columns:
         df_listings["Auction_Date"] = pd.to_datetime(df_listings["Auction_Date"], errors="coerce")
     df_listings["Listing_Timestamp"] = pd.to_datetime(df_listings["Listing_Date"], errors="coerce")
-    df_listings = df_listings.dropna(subset=["Listing_Timestamp"]).copy()
     df_listings["Listing_Date"] = df_listings["Listing_Timestamp"].dt.normalize()
     return df_listings
 
@@ -154,10 +153,22 @@ def longest_unsold_listings(
         "Auction_Date",
         "Storage_Location",
     ]
-    if df_listings.empty or "Listing_Date" not in df_listings.columns:
+    required_date_columns = {"Listing_Date", "Auction_Date"}
+    if df_listings.empty or not required_date_columns.intersection(df_listings.columns):
         return pd.DataFrame(columns=display_columns)
 
-    listings = df_listings.dropna(subset=["Listing_Date"]).copy()
+    listings = df_listings.copy()
+    if "Listing_Date" in listings.columns:
+        listings["Listing_Date"] = pd.to_datetime(listings["Listing_Date"], errors="coerce").dt.normalize()
+    else:
+        listings["Listing_Date"] = pd.NaT
+    if "Auction_Date" in listings.columns:
+        listings["Auction_Date"] = pd.to_datetime(listings["Auction_Date"], errors="coerce").dt.normalize()
+    else:
+        listings["Auction_Date"] = pd.NaT
+
+    listings["Effective_Listing_Date"] = listings["Listing_Date"].fillna(listings["Auction_Date"])
+    listings = listings.dropna(subset=["Effective_Listing_Date"]).copy()
     if listings.empty:
         return pd.DataFrame(columns=display_columns)
 
@@ -170,15 +181,15 @@ def longest_unsold_listings(
         return pd.DataFrame(columns=display_columns)
 
     current_day = (today or pd.Timestamp(datetime.now(ZoneInfo("America/Denver")).date())).normalize()
-    listings["Listing_Date"] = pd.to_datetime(listings["Listing_Date"], errors="coerce").dt.normalize()
-    listings["Days Listed"] = (current_day - listings["Listing_Date"]).dt.days
+    listings["Days Listed"] = (current_day - listings["Effective_Listing_Date"]).dt.days
     listings = listings[listings["Days Listed"] >= 0].copy()
     if listings.empty:
         return pd.DataFrame(columns=display_columns)
 
+    listings["Listing_Date"] = listings["Effective_Listing_Date"]
     available_columns = [column for column in display_columns if column in listings.columns]
     return (
-        listings.sort_values(["Listing_Date", "Title"], ascending=[True, True])
+        listings.sort_values(["Effective_Listing_Date", "Title"], ascending=[True, True])
         .head(limit)[available_columns]
         .reset_index(drop=True)
     )
