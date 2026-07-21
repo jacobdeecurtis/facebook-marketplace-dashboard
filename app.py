@@ -533,6 +533,63 @@ def filter_auction_tab_summary(summary: pd.DataFrame) -> pd.DataFrame:
     return summary[~auction_dates.isin(excluded_dates)].copy()
 
 
+def auction_performance_lookup(summary: pd.DataFrame) -> dict[pd.Timestamp, dict[str, object]]:
+    """Returns per-auction profit stats keyed by normalized auction date."""
+    if summary.empty:
+        return {}
+
+    ranked = summary.copy()
+    ranked["Auction_Date"] = pd.to_datetime(ranked["Auction_Date"], errors="coerce").dt.normalize()
+    ranked["profit"] = pd.to_numeric(ranked["profit"], errors="coerce")
+    ranked["profit_to_cost"] = pd.to_numeric(ranked["profit_to_cost"], errors="coerce")
+    ranked = ranked.dropna(subset=["Auction_Date"]).copy()
+    if ranked.empty:
+        return {}
+
+    rankable = ranked.dropna(subset=["profit_to_cost"]).copy()
+    rankable = rankable.sort_values(["profit_to_cost", "profit"], ascending=[False, False])
+    rankable["profit_to_cost_rank"] = range(1, len(rankable) + 1)
+    ranked = ranked.merge(
+        rankable[["Auction_Date", "profit_to_cost_rank"]],
+        on="Auction_Date",
+        how="left",
+    )
+
+    total_ranked_auctions = len(rankable)
+    return {
+        row["Auction_Date"]: {
+            "profit": row["profit"],
+            "profit_to_cost": row["profit_to_cost"],
+            "rank": row["profit_to_cost_rank"],
+            "rank_total": total_ranked_auctions,
+        }
+        for _, row in ranked.iterrows()
+    }
+
+
+def auction_performance_subtitle(performance: dict[str, object] | None) -> str:
+    if not performance:
+        return "Profit: N/A | Profit / Cost: N/A | Profit / Cost Rank: N/A"
+
+    profit = performance.get("profit")
+    profit_to_cost = performance.get("profit_to_cost")
+    rank = performance.get("rank")
+    rank_total = performance.get("rank_total")
+
+    profit_label = "N/A" if pd.isna(profit) else f"${profit:,.0f}"
+    profit_to_cost_label = "N/A" if pd.isna(profit_to_cost) else f"{profit_to_cost:.1%}"
+    rank_label = (
+        "N/A"
+        if pd.isna(rank) or not rank_total
+        else f"#{int(rank)} of {int(rank_total)}"
+    )
+    return (
+        f"Profit: {profit_label} | "
+        f"Profit / Cost: {profit_to_cost_label} | "
+        f"Profit / Cost Rank: {rank_label}"
+    )
+
+
 def prepare_cumulative_profit_data(df_sales: pd.DataFrame, df_auction_cost: pd.DataFrame) -> pd.DataFrame:
     """Returns day-by-day cumulative profit for each auction through the latest sale date."""
     required_sales_columns = {"Auction_Date", "sale_date", "revenue"}
@@ -697,6 +754,7 @@ def build_single_auction_cumulative_profit_figure(
     x_range: list[float],
     y_range: list[float],
     top_product_names: list[str] | None = None,
+    performance: dict[str, object] | None = None,
 ) -> go.Figure:
     df_auction = (
         df_cumulative_profit[df_cumulative_profit["Auction_Date"].dt.normalize() == auction_date.normalize()]
@@ -775,10 +833,24 @@ def build_single_auction_cumulative_profit_figure(
             bgcolor="rgba(255, 255, 255, 0.88)",
             font=dict(size=12, color="#1F2937"),
         )
+    fig.add_annotation(
+        xref="paper",
+        yref="paper",
+        x=0,
+        y=1.11,
+        xanchor="left",
+        yanchor="top",
+        text=escape(auction_performance_subtitle(performance)),
+        showarrow=False,
+        align="left",
+        font=dict(size=12, color="#4B5563"),
+    )
     fig.update_layout(
         title=dict(
             text=f"Cumulative Profit: {auction_date:%Y-%m-%d}",
             font=dict(color="#111827", size=18),
+            x=0,
+            xanchor="left",
         ),
         xaxis_title="Days Since Auction",
         yaxis_title="Cumulative Profit ($)",
@@ -788,7 +860,7 @@ def build_single_auction_cumulative_profit_figure(
         paper_bgcolor="white",
         height=360,
         showlegend=False,
-        margin=dict(t=60, b=40),
+        margin=dict(t=82, b=40),
     )
     return fig
 
@@ -1351,6 +1423,7 @@ with tab_auctions:
 
     st.subheader("Auction charts with top 5 products")
     top_products = top_selling_product_names(filtered)
+    auction_performance = auction_performance_lookup(auction_tab_summary)
     if (
         cumulative_profit_x_range is not None
         and cumulative_profit_y_range is not None
@@ -1375,6 +1448,7 @@ with tab_auctions:
                     cumulative_profit_x_range,
                     cumulative_profit_y_range,
                     product_names,
+                    auction_performance.get(auction_timestamp.normalize()),
                 ),
                 use_container_width=True,
             )
