@@ -1053,15 +1053,16 @@ def daily_profit(df: pd.DataFrame, df_costs: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
-    projection_target_date = datetime(2026, 8, 19)
+    projection_start_date = datetime(2026, 8, 11)
+    projection_target_date = datetime(2027, 8, 10)
     actual = daily.sort_values("date").copy()
-    projection_end_date = max(projection_target_date, actual["date"].max())
+    chart_end_date = max(projection_target_date, actual["date"].max())
 
     fig = px.line(
         actual,
         x="date",
         y="cumulative_net_profit",
-        title="Overall Cumulative Net Profit Over Time with Linear and Polynomial Regression Projections",
+        title="Overall Cumulative Net Profit Over Time with Linear Regression Projection",
     )
     fig.update_traces(name="Actual", showlegend=True, line=dict(color="#636EFA"))
 
@@ -1071,31 +1072,19 @@ def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
         y = actual["cumulative_net_profit"].to_numpy(dtype=float)
         x_anchor = x.min()
         x_centered = x - x_anchor
-        projection_dates = pd.date_range(start=actual["date"].min(), end=projection_end_date, freq="D")
+        projection_dates = pd.date_range(start=projection_start_date, end=projection_target_date, freq="D")
         projection_x = np.array([date.toordinal() for date in projection_dates], dtype=float) - x_anchor
 
         linear_coefficients = np.polyfit(x_centered, y, deg=1)
         predicted_profit_linear = np.polyval(linear_coefficients, projection_x)
 
-        polynomial_degree = min(2, len(actual) - 1)
-        polynomial_coefficients = np.polyfit(x_centered, y, deg=polynomial_degree)
-        predicted_profit_polynomial = np.polyval(polynomial_coefficients, projection_x)
-
         fig.add_trace(go.Scatter(
             x=projection_dates,
             y=predicted_profit_linear,
             mode="lines",
-            name="Linear",
+            name="2027 Projection",
             line=dict(dash="dot", color="red"),
         ))
-        fig.add_trace(go.Scatter(
-            x=projection_dates,
-            y=predicted_profit_polynomial,
-            mode="lines",
-            name="Polynomial",
-            line=dict(dash="dot", color="blue"),
-        ))
-
         peaks = actual[
             (actual["cumulative_net_profit"].shift(1) < actual["cumulative_net_profit"])
             & (actual["cumulative_net_profit"].shift(-1) < actual["cumulative_net_profit"])
@@ -1118,26 +1107,15 @@ def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
             ))
 
         estimated_profit_linear = predicted_profit_linear[-1]
-        estimated_profit_polynomial = predicted_profit_polynomial[-1]
         fig.add_trace(go.Scatter(
-            x=[projection_end_date],
+            x=[projection_target_date],
             y=[estimated_profit_linear],
             mode="text",
-            text=[f"Linear: ${estimated_profit_linear:,.0f}"],
+            text=[f"Projection: ${estimated_profit_linear:,.0f}"],
             textposition="bottom right",
             showlegend=False,
-            name="Linear Estimate",
+            name="2027 Projection Estimate",
             textfont=dict(color="red", size=10, weight="bold"),
-        ))
-        fig.add_trace(go.Scatter(
-            x=[projection_end_date],
-            y=[estimated_profit_polynomial],
-            mode="text",
-            text=[f"Poly: ${estimated_profit_polynomial:,.0f}"],
-            textposition="top right",
-            showlegend=False,
-            name="Polynomial Estimate",
-            textfont=dict(color="blue", size=10, weight="bold"),
         ))
 
     last_actual = actual.iloc[-1]
@@ -1156,7 +1134,7 @@ def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
         type="line",
         x0=actual["date"].min(),
         y0=0,
-        x1=projection_end_date,
+        x1=chart_end_date,
         y1=0,
         line=dict(color="Grey", width=2, dash="dash"),
     )
