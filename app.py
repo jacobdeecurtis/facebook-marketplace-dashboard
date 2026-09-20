@@ -1097,6 +1097,33 @@ def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
                 ),
             ))
 
+            peaks = year_data[
+                (
+                    year_data["cumulative_comparison_profit"].shift(1)
+                    < year_data["cumulative_comparison_profit"]
+                )
+                & (
+                    year_data["cumulative_comparison_profit"].shift(-1)
+                    < year_data["cumulative_comparison_profit"]
+                )
+            ].copy()
+            if peaks.empty or len(peaks) < 2:
+                last_point = year_data.iloc[[-1]].copy()
+                if peaks.empty or not (peaks["date"] == last_point["date"].iloc[0]).any():
+                    peaks = pd.concat([peaks, last_point])
+
+            if not peaks.empty:
+                fig.add_trace(go.Scatter(
+                    x=peaks["days_since_start"],
+                    y=peaks["cumulative_comparison_profit"],
+                    mode="text",
+                    text=peaks["cumulative_comparison_profit"].map(lambda value: f"${value:,.0f}"),
+                    textposition="top center",
+                    showlegend=False,
+                    name=f"{year} Peaks",
+                    textfont=dict(size=10, weight="bold"),
+                ))
+
             last_row = year_data.iloc[-1]
             fig.add_trace(go.Scatter(
                 x=[last_row["days_since_start"]],
