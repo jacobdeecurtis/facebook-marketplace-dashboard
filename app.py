@@ -1053,95 +1053,84 @@ def daily_profit(df: pd.DataFrame, df_costs: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
-    projection_start_date = datetime(2026, 8, 11)
-    projection_target_date = datetime(2027, 8, 10)
+    comparison_start_month = 8
+    comparison_start_day = 29
+    comparison_years = [2025, 2026]
+
     actual = daily.sort_values("date").copy()
-    chart_end_date = max(projection_target_date, actual["date"].max())
-
-    fig = px.line(
-        actual,
-        x="date",
-        y="cumulative_net_profit",
-        title="Overall Cumulative Net Profit Over Time with Linear Regression Projection",
+    actual["year"] = actual["date"].dt.year
+    actual = actual[actual["year"].isin(comparison_years)].copy()
+    actual["comparison_start"] = pd.to_datetime(
+        actual["year"].astype(str) + f"-{comparison_start_month:02d}-{comparison_start_day:02d}"
     )
-    fig.update_traces(name="Actual", showlegend=True, line=dict(color="#636EFA"))
+    actual = actual[actual["date"] >= actual["comparison_start"]].copy()
 
-    if len(actual) >= 2:
-        actual["date_ordinal"] = actual["date"].map(datetime.toordinal)
-        x = actual["date_ordinal"].to_numpy(dtype=float)
-        y = actual["cumulative_net_profit"].to_numpy(dtype=float)
-        x_anchor = x.min()
-        x_centered = x - x_anchor
-        projection_dates = pd.date_range(start=projection_start_date, end=projection_target_date, freq="D")
-        projection_x = np.array([date.toordinal() for date in projection_dates], dtype=float) - x_anchor
+    fig = go.Figure()
 
-        linear_coefficients = np.polyfit(x_centered, y, deg=1)
-        predicted_profit_linear = np.polyval(linear_coefficients, projection_x)
+    if not actual.empty:
+        actual["days_since_start"] = (actual["date"] - actual["comparison_start"]).dt.days
+        actual["cumulative_comparison_profit"] = (
+            actual.groupby("year")["daily_net_profit"].cumsum()
+        )
 
-        fig.add_trace(go.Scatter(
-            x=projection_dates,
-            y=predicted_profit_linear,
-            mode="lines",
-            name="2027 Projection",
-            line=dict(dash="dot", color="red"),
-        ))
-        peaks = actual[
-            (actual["cumulative_net_profit"].shift(1) < actual["cumulative_net_profit"])
-            & (actual["cumulative_net_profit"].shift(-1) < actual["cumulative_net_profit"])
-        ].copy()
-        if peaks.empty or len(peaks) < 2:
-            last_point = actual.iloc[[-1]].copy()
-            if peaks.empty or not (peaks["date"] == last_point["date"].iloc[0]).any():
-                peaks = pd.concat([peaks, last_point])
+        for year in comparison_years:
+            year_data = actual[actual["year"] == year].copy()
+            if year_data.empty:
+                continue
 
-        if not peaks.empty:
             fig.add_trace(go.Scatter(
-                x=peaks["date"],
-                y=peaks["cumulative_net_profit"],
-                mode="text",
-                text=peaks["cumulative_net_profit"].map(lambda value: f"${value:,.0f}"),
-                textposition="top center",
-                showlegend=False,
-                name="Peaks",
-                textfont=dict(color="darkred", size=10),
+                x=year_data["days_since_start"],
+                y=year_data["cumulative_comparison_profit"],
+                mode="lines+markers",
+                name=str(year),
+                customdata=np.stack(
+                    (
+                        year_data["date"].dt.strftime("%b %d, %Y"),
+                        year_data["daily_net_profit"].map(lambda value: f"${value:,.0f}"),
+                    ),
+                    axis=-1,
+                ),
+                hovertemplate=(
+                    "%{customdata[0]}<br>"
+                    "Daily net profit: %{customdata[1]}<br>"
+                    "Cumulative profit: %{y:$,.0f}<extra></extra>"
+                ),
             ))
 
-        estimated_profit_linear = predicted_profit_linear[-1]
-        fig.add_trace(go.Scatter(
-            x=[projection_target_date],
-            y=[estimated_profit_linear],
-            mode="text",
-            text=[f"Projection: ${estimated_profit_linear:,.0f}"],
-            textposition="bottom right",
-            showlegend=False,
-            name="2027 Projection Estimate",
-            textfont=dict(color="red", size=10, weight="bold"),
-        ))
+            last_row = year_data.iloc[-1]
+            fig.add_trace(go.Scatter(
+                x=[last_row["days_since_start"]],
+                y=[last_row["cumulative_comparison_profit"]],
+                mode="text",
+                text=[f"{year}: ${last_row['cumulative_comparison_profit']:,.0f}"],
+                textposition="top center",
+                showlegend=False,
+                textfont=dict(size=10, weight="bold"),
+            ))
 
-    last_actual = actual.iloc[-1]
-    fig.add_trace(go.Scatter(
-        x=[last_actual["date"]],
-        y=[last_actual["cumulative_net_profit"]],
-        mode="text",
-        text=[f"Actual: ${last_actual['cumulative_net_profit']:,.0f}"],
-        textposition="bottom center",
-        showlegend=False,
-        name="Last Actual Profit",
-        textfont=dict(color="green", size=10, weight="bold"),
-    ))
+    max_days = int(actual["days_since_start"].max()) if not actual.empty else 0
+    tick_days = list(range(0, max_days + 1, 14))
+    if max_days not in tick_days:
+        tick_days.append(max_days)
+    tick_text = [
+        (datetime(2000, comparison_start_month, comparison_start_day) + pd.Timedelta(days=day)).strftime("%b %d")
+        for day in tick_days
+    ]
 
     fig.add_shape(
         type="line",
-        x0=actual["date"].min(),
+        x0=0,
         y0=0,
-        x1=chart_end_date,
+        x1=max(max_days, 1),
         y1=0,
         line=dict(color="Grey", width=2, dash="dash"),
     )
     fig.update_layout(
-        xaxis_title="Date",
+        title="Daily Cumulative Net Profit, Year over Year from August 29",
+        xaxis_title="Days Since August 29",
         yaxis_title="Cumulative Net Profit",
         hovermode="x unified",
+        xaxis=dict(tickmode="array", tickvals=tick_days, ticktext=tick_text),
         yaxis=dict(tickformat="$,.0f"),
         legend=dict(
             orientation="h",
