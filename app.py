@@ -1159,7 +1159,7 @@ def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
 
 def build_cumulative_profit_yoy_comparison(daily: pd.DataFrame) -> go.Figure:
     comparison_start_month = 8
-    comparison_start_day = 29
+    comparison_start_day = 19
     comparison_years = [2025, 2026]
 
     actual = daily.sort_values("date").copy()
@@ -1258,8 +1258,8 @@ def build_cumulative_profit_yoy_comparison(daily: pd.DataFrame) -> go.Figure:
         line=dict(color="Grey", width=2, dash="dash"),
     )
     fig.update_layout(
-        title="Daily Cumulative Net Profit, Year over Year from August 29",
-        xaxis_title="Days Since August 29",
+        title="Daily Cumulative Net Profit, Year over Year from August 19",
+        xaxis_title="Days Since August 19",
         yaxis_title="Cumulative Net Profit",
         hovermode="x unified",
         xaxis=dict(tickmode="array", tickvals=tick_days, ticktext=tick_text),
