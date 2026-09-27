@@ -1053,6 +1053,111 @@ def daily_profit(df: pd.DataFrame, df_costs: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_cumulative_profit_projection(daily: pd.DataFrame) -> go.Figure:
+    projection_start_date = datetime(2026, 8, 11)
+    projection_target_date = datetime(2027, 8, 10)
+    actual = daily.sort_values("date").copy()
+    chart_end_date = max(projection_target_date, actual["date"].max())
+
+    fig = px.line(
+        actual,
+        x="date",
+        y="cumulative_net_profit",
+        title="Overall Cumulative Net Profit Over Time with Linear Regression Projection",
+    )
+    fig.update_traces(name="Actual", showlegend=True, line=dict(color="#636EFA"))
+
+    if len(actual) >= 2:
+        actual["date_ordinal"] = actual["date"].map(datetime.toordinal)
+        x = actual["date_ordinal"].to_numpy(dtype=float)
+        y = actual["cumulative_net_profit"].to_numpy(dtype=float)
+        x_anchor = x.min()
+        x_centered = x - x_anchor
+        projection_dates = pd.date_range(start=projection_start_date, end=projection_target_date, freq="D")
+        projection_x = np.array([date.toordinal() for date in projection_dates], dtype=float) - x_anchor
+
+        linear_coefficients = np.polyfit(x_centered, y, deg=1)
+        predicted_profit_linear = np.polyval(linear_coefficients, projection_x)
+
+        fig.add_trace(go.Scatter(
+            x=projection_dates,
+            y=predicted_profit_linear,
+            mode="lines",
+            name="2027 Projection",
+            line=dict(dash="dot", color="red"),
+        ))
+        peaks = actual[
+            (actual["cumulative_net_profit"].shift(1) < actual["cumulative_net_profit"])
+            & (actual["cumulative_net_profit"].shift(-1) < actual["cumulative_net_profit"])
+        ].copy()
+        if peaks.empty or len(peaks) < 2:
+            last_point = actual.iloc[[-1]].copy()
+            if peaks.empty or not (peaks["date"] == last_point["date"].iloc[0]).any():
+                peaks = pd.concat([peaks, last_point])
+
+        if not peaks.empty:
+            fig.add_trace(go.Scatter(
+                x=peaks["date"],
+                y=peaks["cumulative_net_profit"],
+                mode="text",
+                text=peaks["cumulative_net_profit"].map(lambda value: f"${value:,.0f}"),
+                textposition="top center",
+                showlegend=False,
+                name="Peaks",
+                textfont=dict(color="darkred", size=10),
+            ))
+
+        estimated_profit_linear = predicted_profit_linear[-1]
+        fig.add_trace(go.Scatter(
+            x=[projection_target_date],
+            y=[estimated_profit_linear],
+            mode="text",
+            text=[f"Projection: ${estimated_profit_linear:,.0f}"],
+            textposition="bottom right",
+            showlegend=False,
+            name="2027 Projection Estimate",
+            textfont=dict(color="red", size=10, weight="bold"),
+        ))
+
+    last_actual = actual.iloc[-1]
+    fig.add_trace(go.Scatter(
+        x=[last_actual["date"]],
+        y=[last_actual["cumulative_net_profit"]],
+        mode="text",
+        text=[f"Actual: ${last_actual['cumulative_net_profit']:,.0f}"],
+        textposition="bottom center",
+        showlegend=False,
+        name="Last Actual Profit",
+        textfont=dict(color="green", size=10, weight="bold"),
+    ))
+
+    fig.add_shape(
+        type="line",
+        x0=actual["date"].min(),
+        y0=0,
+        x1=chart_end_date,
+        y1=0,
+        line=dict(color="Grey", width=2, dash="dash"),
+    )
+    fig.update_layout(
+        xaxis_title="Date",
+        yaxis_title="Cumulative Net Profit",
+        hovermode="x unified",
+        yaxis=dict(tickformat="$,.0f"),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.25,
+            xanchor="center",
+            x=0.5,
+        ),
+        margin=dict(b=100),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    return fig
+
+
+def build_cumulative_profit_yoy_comparison(daily: pd.DataFrame) -> go.Figure:
     comparison_start_month = 8
     comparison_start_day = 29
     comparison_years = [2025, 2026]
@@ -1388,6 +1493,7 @@ with tab_overview:
     st.subheader("Daily cumulative profit")
     profit_daily = daily_profit(filtered, df_total_cost)
     if not profit_daily.empty:
+        st.plotly_chart(build_cumulative_profit_yoy_comparison(profit_daily), use_container_width=True)
         st.plotly_chart(build_cumulative_profit_projection(profit_daily), use_container_width=True)
     else:
         st.info("No profit data found for this date range.")
