@@ -533,48 +533,83 @@ def filter_auction_tab_summary(summary: pd.DataFrame) -> pd.DataFrame:
     return summary[~auction_dates.isin(excluded_dates)].copy()
 
 
-def auction_performance_lookup(summary: pd.DataFrame) -> dict[pd.Timestamp, dict[str, object]]:
-    """Returns per-auction profit stats keyed by normalized auction date."""
-    if summary.empty:
-        return {}
-
-    ranked = summary.copy()
-    ranked["Auction_Date"] = pd.to_datetime(ranked["Auction_Date"], errors="coerce").dt.normalize()
-    ranked["profit"] = pd.to_numeric(ranked["profit"], errors="coerce")
-    ranked["profit_to_cost"] = pd.to_numeric(ranked["profit_to_cost"], errors="coerce")
-    ranked = ranked.dropna(subset=["Auction_Date"]).copy()
-    if ranked.empty:
-        return {}
-
-    rankable = ranked.dropna(subset=["profit_to_cost"]).copy()
-    rankable = rankable.sort_values(["profit_to_cost", "profit"], ascending=[False, False])
-    rankable["profit_to_cost_rank"] = range(1, len(rankable) + 1)
-    ranked = ranked.merge(
-        rankable[["Auction_Date", "profit_to_cost_rank"]],
-        on="Auction_Date",
-        how="left",
-    )
-
-    total_ranked_auctions = len(rankable)
-    return {
-        row["Auction_Date"]: {
-            "profit": row["profit"],
-            "profit_to_cost": row["profit_to_cost"],
-            "rank": row["profit_to_cost_rank"],
-            "rank_total": total_ranked_auctions,
-        }
-        for _, row in ranked.iterrows()
+def auction_performance_lookup(
+    df_cumulative_profit: pd.DataFrame,
+) -> dict[pd.Timestamp, dict[str, object]]:
+    """Returns profit stats and an age-adjusted rank for each auction."""
+    required_columns = {
+        "Auction_Date",
+        "cumulative_profit",
+        "time_since_auction",
+        "auction_cost",
     }
+    if df_cumulative_profit.empty or not required_columns.issubset(df_cumulative_profit.columns):
+        return {}
+
+    performance = df_cumulative_profit[list(required_columns)].copy()
+    performance["Auction_Date"] = pd.to_datetime(
+        performance["Auction_Date"], errors="coerce"
+    ).dt.normalize()
+    for column in ["cumulative_profit", "time_since_auction", "auction_cost"]:
+        performance[column] = pd.to_numeric(performance[column], errors="coerce")
+    performance = performance.dropna(
+        subset=["Auction_Date", "cumulative_profit", "time_since_auction", "auction_cost"]
+    ).copy()
+    performance = performance[performance["time_since_auction"] >= 0].copy()
+    if performance.empty:
+        return {}
+
+    performance["time_since_auction"] = performance["time_since_auction"].astype(int)
+    performance = (
+        performance.sort_values(["Auction_Date", "time_since_auction"])
+        .drop_duplicates(["Auction_Date", "time_since_auction"], keep="last")
+    )
+    latest_per_auction = performance.groupby("Auction_Date", as_index=False).tail(1)
+
+    results = {}
+    for _, auction in latest_per_auction.iterrows():
+        auction_date = auction["Auction_Date"]
+        auction_age = int(auction["time_since_auction"])
+        auction_cost = auction["auction_cost"]
+        profit_to_cost = (
+            auction["cumulative_profit"] / auction_cost if auction_cost > 0 else np.nan
+        )
+
+        # Compare this auction's current result with every auction's result at
+        # this exact age, so older auctions do not receive extra selling time.
+        peers = performance[
+            (performance["time_since_auction"] == auction_age)
+            & (performance["auction_cost"] > 0)
+        ].copy()
+        peers["profit_to_cost"] = peers["cumulative_profit"] / peers["auction_cost"]
+        peers = peers.sort_values(
+            ["profit_to_cost", "cumulative_profit", "Auction_Date"],
+            ascending=[False, False, True],
+        )
+        peers["profit_to_cost_rank"] = range(1, len(peers) + 1)
+        auction_rank = peers.loc[
+            peers["Auction_Date"] == auction_date, "profit_to_cost_rank"
+        ]
+
+        results[auction_date] = {
+            "profit": auction["cumulative_profit"],
+            "profit_to_cost": profit_to_cost,
+            "rank": auction_rank.iloc[0] if not auction_rank.empty else np.nan,
+            "rank_total": len(peers),
+            "rank_age_days": auction_age,
+        }
+    return results
 
 
 def auction_performance_subtitle(performance: dict[str, object] | None) -> str:
     if not performance:
-        return "Profit: N/A | Profit / Cost: N/A | Profit / Cost Rank: N/A"
+        return "Profit: N/A | Profit / Cost: N/A | Age-adjusted Rank: N/A"
 
     profit = performance.get("profit")
     profit_to_cost = performance.get("profit_to_cost")
     rank = performance.get("rank")
     rank_total = performance.get("rank_total")
+    rank_age_days = performance.get("rank_age_days")
 
     profit_label = "N/A" if pd.isna(profit) else f"${profit:,.0f}"
     profit_to_cost_label = "N/A" if pd.isna(profit_to_cost) else f"{profit_to_cost:.1%}"
@@ -583,10 +618,11 @@ def auction_performance_subtitle(performance: dict[str, object] | None) -> str:
         if pd.isna(rank) or not rank_total
         else f"#{int(rank)} of {int(rank_total)}"
     )
+    rank_age_label = "N/A" if pd.isna(rank_age_days) else f"Day {int(rank_age_days)}"
     return (
         f"Profit: {profit_label} | "
         f"Profit / Cost: {profit_to_cost_label} | "
-        f"Profit / Cost Rank: {rank_label}"
+        f"Profit / Cost Rank at {rank_age_label}: {rank_label}"
     )
 
 
@@ -1523,7 +1559,7 @@ with tab_auctions:
 
     st.subheader("Auction charts with top 5 products")
     top_products = top_selling_product_names(filtered)
-    auction_performance = auction_performance_lookup(auction_tab_summary)
+    auction_performance = auction_performance_lookup(df_cumulative_profit)
     if (
         cumulative_profit_x_range is not None
         and cumulative_profit_y_range is not None
